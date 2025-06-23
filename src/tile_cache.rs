@@ -33,7 +33,7 @@ pub enum CacheMessage {
 /// An application can hold multiple caches with different tile sources
 pub struct TileCache {
     cache: HashMap<TileId, Option<Handle>>,
-    fetcher: Arc<Fetcher>,
+    fetcher: Arc<HttpFetcher>,
 }
 
 impl TileCache {
@@ -44,7 +44,7 @@ impl TileCache {
         // For receiving tiles
         Self {
             cache: HashMap::new(),
-            fetcher: Arc::new(Fetcher {
+            fetcher: Arc::new(HttpFetcher {
                 semaphore: Semaphore::new(6),
                 source: Box::new(source),
                 client: reqwest::ClientBuilder::new()
@@ -116,13 +116,13 @@ impl TileCache {
 
 /// The fetcher is cloned and moved into an async task to fetch a tile.
 #[derive(Debug)]
-struct Fetcher {
+struct HttpFetcher {
     semaphore: Semaphore,
     source: Box<dyn Source>,
     client: reqwest::Client,
 }
 
-impl Fetcher {
+impl HttpFetcher {
     async fn fetch_tile(&self, tile_id: TileId) -> Result<Handle, Error> {
         // Semaphore ensures we are not making too many requests
         // Assume that if we have been locked for more than a second,

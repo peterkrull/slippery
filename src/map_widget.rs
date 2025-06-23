@@ -1,13 +1,7 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-};
+use std::collections::{HashMap, hash_map::Entry};
 
 use iced::{Element, Rectangle, Vector};
-use iced_core::{
-    Image, Widget,
-    image::Handle,
-    renderer::Quad,
-};
+use iced_core::{Image, Widget, image::Handle, renderer::Quad};
 
 use crate::{
     draw_cache::DrawCache,
@@ -408,7 +402,7 @@ where
             }
         }
 
-        if visuals_changed || self.visible_tiles.is_empty(){
+        if visuals_changed || self.visible_tiles.is_empty() {
             let flood_area = bounds.expand(128);
             self.visible_tiles = self.flood_tiles(&flood_area);
             self.prev_bounds = bounds;

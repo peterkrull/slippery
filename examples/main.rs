@@ -1,11 +1,7 @@
 use iced::{
     self, Element, Task,
     alignment::Vertical,
-    widget::{
-        Button, column,
-        container,
-        row, slider, text,
-    },
+    widget::{Button, column, container, row, slider, text},
 };
 use slippery::{
     CacheMessage, Geographic, MapWidget, TileCache, TileId, Viewpoint, Zoom, sources::OpenStreetMap,
