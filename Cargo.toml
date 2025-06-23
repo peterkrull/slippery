@@ -1,0 +1,24 @@
+[package]
+name = "slippery"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", features = ["image", "tokio"] }
+iced_core = { git = "https://github.com/iced-rs/iced", features = ["advanced"] }
+
+# For fetching tiles
+reqwest = "0.12.20"
+reqwest-middleware = "0.4.2"
+http-cache-reqwest = "0.15.1"
+
+# Reqwest requires tokio anyway
+tokio = { version = "1.45.1", features = ["time"] }
+
+thiserror = "2.0.12"
+
+log = "0.4.27"
+env_logger = "0.11.8"
+
+[dev-dependencies]
+approx = "0.5.1"
