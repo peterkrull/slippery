@@ -1,2 +1,4 @@
-# slippery
-A slippy map widget for Iced
+# Slippery
+A slippy map widget for the Iced toolkit.
+
+![example screenshot](assets/readme-example.png)
