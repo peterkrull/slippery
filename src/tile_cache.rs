@@ -104,7 +104,7 @@ impl TileCache {
                     match handle.fetch_tile(id).await {
                         Ok(tile) => CacheMessage::TileLoaded { id, handle: tile },
                         // TODO, handle this error better
-                        Err(_) => CacheMessage::TileLoadFailed { id }
+                        Err(_) => CacheMessage::TileLoadFailed { id },
                     }
                 });
             }
@@ -112,63 +112,9 @@ impl TileCache {
 
         Task::none()
     }
-
-    // /// Get at tile, or interpolate it from lower zoom levels. This function does not start any
-    // /// downloads.
-    // fn get_from_cache_or_interpolate(&self, tile_id: TileId) -> Option<ScreenTile> {
-    //     let mut zoom_candidate = tile_id.zoom();
-
-    //     loop {
-    //         let (zoomed_tile_id, uv) =
-    //             interpolate_from_lower_zoom(tile_id, zoom_candidate);
-
-    //         if let Some(Some(texture)) = self.cache.get(&zoomed_tile_id) {
-    //             break Some(ScreenTile {
-    //                 handle: texture.clone(),
-    //                 place: uv,
-    //             });
-    //         }
-
-    //         // Keep zooming out until we find a donor or there is no more zoom levels.
-    //         zoom_candidate = zoom_candidate.checked_sub(1)?;
-    //     }
-    // }
-
-    // fn interpolate(&self, tile_id L, rectangle: Rectangle) -> Option<(Handle, Rectangle)> {
-    //     let mut replacement_tile_id = *self;
-    //     while let Some(next_tile_id) = replacement_tile_id.downsample() {
-    //         replacement_tile_id = next_tile_id;
-    //         if let Some(Some(tile)) = self.map.cache.get(&replacement_tile_id) {
-
-    //             // This tile is already set to be drawn
-    //             if draw_cache.contains_key(&replacement_tile_id) {
-    //                 break;
-    //             }
-
-    //             let dzoom = 2u32.pow((tile_id.zoom() - replacement_tile_id.zoom()) as u32);
-
-    //             let map_center = self.position
-    //                 .point
-    //                 .into_pixel_space(self.map.fetcher.source.tile_size(), self.position.zoom.f64());
-
-    //             // Determine the offset of this tile relative to the viewport center
-    //             let corrected_tile_size = rectangle.width as f64 * dzoom as f64;
-    //             let tile_projected = replacement_tile_id.project(corrected_tile_size);
-    //             let tile_offset = vec32(tile_projected - map_center);
-
-    //             // The area on the screen the tile will be rendered in
-    //             let tile_screen_position = _viewport.center() + tile_offset;
-    //             let projected_position = rect(tile_screen_position, corrected_tile_size);
-
-    //             draw_cache.insert(replacement_tile_id, tile, &projected_position);
-
-    //             break;
-    //         }
-    //     }
-    //     None
-    // }
 }
 
+/// The fetcher is cloned and moved into an async task to fetch a tile.
 #[derive(Debug)]
 struct Fetcher {
     semaphore: Semaphore,
