@@ -4,7 +4,7 @@ use crate::position::total_tiles;
 
 /// Identifies the tile in the tile grid.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TileId {
+pub struct TileCoord {
     /// X number of the tile.
     x: u32,
 
@@ -16,9 +16,9 @@ pub struct TileId {
     zoom: u8,
 }
 
-impl TileId {
+impl TileCoord {
     /// The lowest-quality zoom level
-    pub const ZERO: Self = TileId {
+    pub const ZERO: Self = TileCoord {
         x: 0,
         y: 0,
         zoom: 0,
@@ -26,9 +26,9 @@ impl TileId {
 
     pub fn new(x: u32, y: u32, zoom: u8) -> Self {
         let num_tiles = 2u32.pow(zoom as u32);
-        TileId {
-            x: x.clamp(0, num_tiles - 1),
-            y: y.clamp(0, num_tiles - 1),
+        TileCoord {
+            x: x.min(num_tiles - 1),
+            y: y.min(num_tiles - 1),
             zoom,
         }
     }
@@ -83,47 +83,47 @@ impl TileId {
 
     // Obtain a lower-zoom level TileID that covers this tile.
     // Useful for filling in not-yet loaded tiles.
-    pub fn downsample(&self) -> Option<TileId> {
-        Some(TileId {
+    pub fn parent(&self) -> Option<TileCoord> {
+        Some(TileCoord {
             x: self.x / 2,
             y: self.y / 2,
             zoom: self.zoom.checked_sub(1)?,
         })
     }
 
-    pub fn east(&self) -> Option<TileId> {
-        (self.x < total_tiles(self.zoom) - 1).then(|| TileId {
+    pub fn east(&self) -> Option<TileCoord> {
+        (self.x < total_tiles(self.zoom) - 1).then(|| TileCoord {
             x: self.x + 1,
             y: self.y,
             zoom: self.zoom,
         })
     }
 
-    pub fn west(&self) -> Option<TileId> {
-        Some(TileId {
+    pub fn west(&self) -> Option<TileCoord> {
+        Some(TileCoord {
             x: self.x.checked_sub(1)?,
             y: self.y,
             zoom: self.zoom,
         })
     }
 
-    pub fn north(&self) -> Option<TileId> {
-        Some(TileId {
+    pub fn north(&self) -> Option<TileCoord> {
+        Some(TileCoord {
             x: self.x,
             y: self.y.checked_sub(1)?,
             zoom: self.zoom,
         })
     }
 
-    pub fn south(&self) -> Option<TileId> {
-        (self.y < total_tiles(self.zoom) - 1).then(|| TileId {
+    pub fn south(&self) -> Option<TileCoord> {
+        (self.y < total_tiles(self.zoom) - 1).then(|| TileCoord {
             x: self.x,
             y: self.y + 1,
             zoom: self.zoom,
         })
     }
 
-    pub fn neighbors(&self) -> [Option<TileId>; 4] {
+    pub fn neighbors(&self) -> [Option<TileCoord>; 4] {
         [self.north(), self.east(), self.south(), self.west()]
     }
 

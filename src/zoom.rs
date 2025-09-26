@@ -9,8 +9,7 @@ impl TryFrom<f64> for Zoom {
     type Error = InvalidZoom;
 
     fn try_from(value: f64) -> Result<Self, Self::Error> {
-        // The upper limit is artificial. Should it be removed altogether?
-        if !(2. ..=26.).contains(&value) {
+        if !(0. ..=24.).contains(&value) {
             Err(InvalidZoom)
         } else {
             Ok(Self(value))

@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 
 use crate::{
     sources::{Attribution, Source},
-    tile::TileId,
+    tile_coord::TileCoord,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -24,15 +24,16 @@ enum Error {
 /// or when the fetching future resolves and responds with its result.
 #[derive(Debug, Clone)]
 pub enum CacheMessage {
-    LoadTile { id: TileId },
-    TileLoaded { id: TileId, handle: Handle },
-    TileLoadFailed { id: TileId },
+    LoadTile { id: TileCoord },
+    TileLoaded { id: TileCoord, handle: Handle },
+    TileLoadFailed { id: TileCoord },
 }
 
+#[derive(Debug)]
 /// The cache which holds the raster tiles.
 /// An application can hold multiple caches with different tile sources
 pub struct TileCache {
-    cache: HashMap<TileId, Option<Handle>>,
+    cache: HashMap<TileCoord, Option<Handle>>,
     fetcher: Arc<HttpFetcher>,
 }
 
@@ -67,11 +68,11 @@ impl TileCache {
         self.fetcher.source.max_zoom()
     }
 
-    pub fn should_fetch(&self, tile_id: &TileId) -> bool {
+    pub fn should_fetch(&self, tile_id: &TileCoord) -> bool {
         self.cache.get(tile_id).is_none()
     }
 
-    pub fn get(&self, tile_id: &TileId) -> Option<&Handle> {
+    pub fn get(&self, tile_id: &TileCoord) -> Option<&Handle> {
         self.cache
             .get(tile_id)
             .map(|inner| inner.as_ref())
@@ -123,10 +124,11 @@ struct HttpFetcher {
 }
 
 impl HttpFetcher {
-    async fn fetch_tile(&self, tile_id: TileId) -> Result<Handle, Error> {
+    async fn fetch_tile(&self, tile_id: TileCoord) -> Result<Handle, Error> {
         // Semaphore ensures we are not making too many requests
         // Assume that if we have been locked for more than a second,
         // that the camera may have moved and the tile in no longer needed.
+        // If it was needed, another fetch request will just be made.
         let _permit =
             tokio::time::timeout(std::time::Duration::from_secs(1), self.semaphore.acquire())
                 .await

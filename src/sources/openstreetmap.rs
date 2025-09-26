@@ -1,12 +1,12 @@
 use super::{Attribution, Source};
-use crate::tile::TileId;
+use crate::tile_coord::TileCoord;
 
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]
 pub struct OpenStreetMap;
 
 impl Source for OpenStreetMap {
-    fn tile_url(&self, tile_id: TileId) -> String {
+    fn tile_url(&self, tile_id: TileCoord) -> String {
         format!(
             "https://tile.openstreetmap.org/{}/{}/{}.png",
             tile_id.zoom(),

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iced::Rectangle;
 use iced_core::image::Handle;
 
-use crate::tile::TileId;
+use crate::tile_coord::TileCoord;
 
 pub(crate) struct DrawCache<'a> {
     maps: HashMap<u8, HashMap<(u32, u32), (&'a Handle, Rectangle)>>,
@@ -17,7 +17,7 @@ impl<'a> DrawCache<'a> {
     }
 
     /// Check whether the cache contains some tile
-    pub fn contains_key(&mut self, tile_id: &TileId) -> bool {
+    pub fn contains_key(&mut self, tile_id: &TileCoord) -> bool {
         self.maps
             .get(&tile_id.zoom())
             .is_some_and(|inner| inner.contains_key(&tile_id.x_y()))
@@ -26,7 +26,7 @@ impl<'a> DrawCache<'a> {
     /// Insert a tile using its Id, image handle and its screen-space rectangle
     pub fn insert(
         &mut self,
-        tile_id: TileId,
+        tile_id: TileCoord,
         value: &'a Handle,
         rectangle: Rectangle,
     ) -> Option<(&'a Handle, Rectangle)> {
@@ -37,14 +37,13 @@ impl<'a> DrawCache<'a> {
     }
 
     /// Iterate through all tiles in ascending zoom order
-    pub fn iter(&self) -> impl Iterator<Item = (TileId, (&'a Handle, Rectangle))> {
+    pub fn iter_tiles(&self) -> impl Iterator<Item = (&'a Handle, Rectangle)> {
         let mut zooms: Vec<&u8> = self.maps.keys().collect();
         zooms.sort();
 
         zooms.into_iter().flat_map(|zoom| {
             let map = &self.maps[zoom];
-            map.iter()
-                .map(move |((x, y), v)| (TileId::new(*x, *y, *zoom), *v))
+            map.iter().map(move |(_, v)| *v)
         })
     }
 }

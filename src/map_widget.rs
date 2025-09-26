@@ -1,104 +1,38 @@
-use std::collections::{HashMap, hash_map::Entry};
-
-use iced::{Element, Rectangle, Vector};
-use iced_core::{Image, Widget, image::Handle, renderer::Quad};
-
-use crate::{
-    draw_cache::DrawCache,
-    position::{Geographic, Mercator},
-    tile::TileId,
-    tile_cache::{CacheMessage, TileCache},
-    zoom::Zoom,
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, hash_map::Entry},
 };
 
-/// The viewpoint of the [`MapWidget`] consists of a coordinate of
-/// the center of the viewport, and a zoom level.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Viewpoint {
-    pub position: Mercator,
-    pub zoom: Zoom,
-}
+use iced::{Element, Point, Rectangle};
+use iced_core::{
+    Image, Widget,
+    image::{FilterMethod, Handle},
+};
 
-impl Viewpoint {
-    /// Move the viewpoint to a different location defined by the a [`Mercator`] coordinate
-    pub fn move_to_mercator(&mut self, mercator: Mercator) {
-        self.position = mercator;
-    }
+use crate::{
+    Projector, Viewpoint,
+    draw_cache::DrawCache,
+    position::{Geographic, Mercator},
+    tile_cache::{CacheMessage, TileCache},
+    tile_coord::TileCoord,
+};
 
-    /// Move the viewpoint to a different location defined by the a [`Geographic`] coordinate
-    pub fn move_to_geographic(&mut self, geographic: Geographic) {
-        self.position = geographic.as_mercator();
-    }
-
-    /// Get the viewpoint position in the pixel space representation
-    pub fn into_pixel_space(&self, tile_size: u32) -> iced::Point<f64> {
-        self.position.into_pixel_space(tile_size, self.zoom.f64())
-    }
-
-    /// Get the [`Mercator`] coordinate for a position within the viewport bounds
-    pub fn position_in_viewport(
-        &self,
-        tile_size: u32,
-        position: iced::Point,
-        bounds: Rectangle,
-    ) -> Mercator {
-        // Get cursor position relative to viewport center
-        let cursor_offset = position - bounds.center();
-        let cursor_offset = Vector::new(cursor_offset.x as f64, cursor_offset.y as f64);
-
-        // Temporarily shift the viewport to be centered over the cursor
-        let center_pixel_space = self.position.into_pixel_space(tile_size, self.zoom.f64());
-        let adjusted_center = center_pixel_space + cursor_offset;
-        Mercator::from_pixel_space(adjusted_center, tile_size, self.zoom.f64())
-    }
-
-    /// Zoom in/out of a position in the viewport. This would typically be the cursor position
-    pub fn zoom_on_position(
-        &mut self,
-        zoom_amount: f64,
-        tile_size: u32,
-        position: iced::Point,
-        bounds: Rectangle,
-    ) {
-        // Get cursor position relative to viewport center
-        let cursor_offset = position - bounds.center();
-        let cursor_offset = Vector::new(cursor_offset.x as f64, cursor_offset.y as f64);
-
-        // Temporarily shift the viewport to be centered over the cursor
-        let center_pixel_space = self.position.into_pixel_space(tile_size, self.zoom.f64());
-        let adjusted_center = center_pixel_space + cursor_offset;
-        self.position = Mercator::from_pixel_space(adjusted_center, tile_size, self.zoom.f64());
-
-        // Apply desired zoom
-        self.zoom.zoom_by(zoom_amount);
-
-        // Shift the viewport back by the same amount after applying zoom
-        let center_pixel_space = self.position.into_pixel_space(tile_size, self.zoom.f64());
-        let adjusted_center = center_pixel_space - cursor_offset;
-        self.position = Mercator::from_pixel_space(adjusted_center, tile_size, self.zoom.f64());
-    }
-
-    /// Zoom in/out of the center of the viewport
-    pub fn zoom_on_center(&mut self, zoom_amount: f64) {
-        self.zoom.zoom_by(zoom_amount);
-    }
-}
+// At zoom level 0, any map provider will take up this many pixels.
+pub const BASE_SIZE: u32 = 512;
 
 /// A [slippy tile](https://wiki.openstreetmap.org/wiki/Slippy_map) widget
-pub struct MapWidget<'a, Message> {
+pub struct MapWidget<'a, Message, Theme, Renderer> {
     map: &'a TileCache,
     viewpoint: Viewpoint,
-    prev_bounds: Rectangle,
-    scale: f64,
-    visible_tiles: Vec<(TileId, Rectangle)>,
+    visible_tiles: Vec<(TileCoord, Rectangle)>,
     mapper: fn(CacheMessage) -> Message,
-    markers: Option<&'a [Geographic]>,
-    on_change: Option<fn(Viewpoint) -> Message>,
+    children: Vec<GlobalElement<'a, Message, Theme, Renderer>>,
+    on_update: Option<fn(Projector) -> Message>,
     on_click: Option<fn(Geographic) -> Message>,
-    on_hover: Option<fn(Geographic) -> Message>,
+    on_viewpoint: Option<fn(Viewpoint) -> Message>,
 }
 
-impl<'a, Message> MapWidget<'a, Message> {
+impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
     pub fn new(
         map: &'a TileCache,
         mapper: fn(CacheMessage) -> Message,
@@ -107,21 +41,19 @@ impl<'a, Message> MapWidget<'a, Message> {
         Self {
             map,
             viewpoint: position,
-            prev_bounds: Rectangle::default(),
-            scale: 1.0,
             visible_tiles: Vec::new(),
-            markers: None,
-            on_change: None,
+            children: Vec::new(),
+            on_update: None,
             on_click: None,
-            on_hover: None,
+            on_viewpoint: None,
             mapper,
         }
     }
 
     /// This message is emitted when changing the map viewpoint (position/zoom)
-    pub fn on_viewpoint_change(self, func: fn(Viewpoint) -> Message) -> Self {
+    pub fn on_update(self, func: fn(Projector) -> Message) -> Self {
         Self {
-            on_change: Some(func),
+            on_update: Some(func),
             ..self
         }
     }
@@ -134,50 +66,46 @@ impl<'a, Message> MapWidget<'a, Message> {
         }
     }
 
-    /// This message is emitted when the cursor hovers over different location
-    pub fn on_hover(self, func: fn(Geographic) -> Message) -> Self {
+    /// This message is emitted when a location is left-clicked
+    pub fn on_viewpoint(self, func: fn(Viewpoint) -> Message) -> Self {
         Self {
-            on_hover: Some(func),
+            on_viewpoint: Some(func),
             ..self
         }
     }
 
     /// Draw a list of [`Geographic`] markers
-    pub fn with_markers(self, markers: &'a [Geographic]) -> Self {
+    pub fn with_children(
+        self,
+        children: impl IntoIterator<Item = GlobalElement<'a, Message, Theme, Renderer>>,
+    ) -> Self {
         Self {
-            markers: Some(markers),
-            ..self
-        }
-    }
-
-    pub fn with_scale(self, scale: f32) -> Self {
-        Self {
-            scale: scale as f64,
+            children: children.into_iter().collect(),
             ..self
         }
     }
 
     /// Use [flood fill algorithm](https://en.wikipedia.org/wiki/Flood_fill) to determine
     /// which tiles need to be drawn..
-    pub fn flood_tiles(&self, viewport: &Rectangle) -> Vec<(TileId, Rectangle)> {
-        let tile_size = self.map.tile_size();
-
+    pub fn flood_tiles(&self, viewport: &Rectangle) -> Vec<(TileCoord, Rectangle)> {
         // Allocate for the number of tiles to fill the screen, and then some
-        let capacity = viewport.area() / (tile_size * tile_size) as f32;
+        let capacity = viewport.area() / (BASE_SIZE * BASE_SIZE) as f32;
         let mut tiles = HashMap::with_capacity(capacity.ceil() as usize);
 
-        let zoom = self.viewpoint.zoom.f64().min(self.map.max_zoom() as f64);
-        let zoom = zoom + self.scale.log2();
+        let scale_offset = (BASE_SIZE as f64 / self.map.tile_size() as f64).log2();
 
+        let scaled_zoom = self.viewpoint.zoom.f64().min(self.map.max_zoom() as f64) + scale_offset;
+
+        // TODO This goofs up when zooming out far enough
         let corrected_tile_size =
-            tile_size as f64 * 2f64.powf(self.viewpoint.zoom.f64() - zoom.round());
+            BASE_SIZE as f64 * 2f64.powf(self.viewpoint.zoom.f64() - scaled_zoom.round());
 
-        let central_tile_id = self.viewpoint.position.tile_id(zoom.round() as u8);
+        let central_tile_id = self.viewpoint.position.tile_id(scaled_zoom.round() as u8);
 
         let map_center = self
             .viewpoint
             .position
-            .into_pixel_space(tile_size, self.viewpoint.zoom.f64());
+            .into_pixel_space(self.viewpoint.zoom.f64());
 
         // Recursively fill up the `tiles` map
         self.flood_tiles_inner(
@@ -198,10 +126,10 @@ impl<'a, Message> MapWidget<'a, Message> {
     fn flood_tiles_inner(
         &self,
         viewport: &Rectangle,
-        tile_id: TileId,
+        tile_id: TileCoord,
         map_center: iced::Point<f64>,
         corrected_tile_size: f64,
-        tiles: &mut HashMap<TileId, Option<Rectangle>>,
+        tiles: &mut HashMap<TileCoord, Option<Rectangle>>,
     ) {
         // Return early if this entry has already been checked
         let Entry::Vacant(entry) = tiles.entry(tile_id) else {
@@ -232,6 +160,7 @@ impl<'a, Message> MapWidget<'a, Message> {
     }
 }
 
+#[derive(Clone)]
 enum Movement {
     Idle,
     Dragging {
@@ -240,12 +169,15 @@ enum Movement {
     },
 }
 
+#[derive(Clone)]
 struct WidgetState {
-    cursor_position: Option<iced::Point>,
+    cursor: Option<iced::Point>,
     movement: Movement,
+    prev_bounds: Rectangle,
 }
 
-impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for MapWidget<'a, Message>
+impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for MapWidget<'a, Message, Theme, Renderer>
 where
     Renderer: iced_core::image::Renderer<Handle = Handle> + iced_core::Renderer,
 {
@@ -258,11 +190,66 @@ where
 
     fn layout(
         &self,
-        _tree: &mut iced_core::widget::Tree,
-        _renderer: &Renderer,
+        tree: &mut iced_core::widget::Tree,
+        renderer: &Renderer,
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
-        iced_core::layout::Node::new(limits.max())
+        let state = match &mut tree.state {
+            iced_core::widget::tree::State::None => {
+                tree.state = iced_core::widget::tree::State::new(WidgetState {
+                    cursor: None,
+                    movement: Movement::Idle,
+                    prev_bounds: Rectangle::default(),
+                });
+
+                let iced_core::widget::tree::State::Some(any) = &mut tree.state else {
+                    panic!("Must happen")
+                };
+                any.downcast_mut::<WidgetState>()
+                    .expect("Downcast widget state")
+            }
+            iced_core::widget::tree::State::Some(any) => any
+                .downcast_mut::<WidgetState>()
+                .expect("Downcast widget state"),
+        };
+
+        let state = state.clone();
+
+        let bounds = limits.max();
+
+        let children = self
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                let inner_widget = child.element.as_widget();
+
+                let position = Projector {
+                    viewpoint: self.viewpoint,
+                    cursor: state.cursor,
+                    bounds: Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: bounds.width,
+                        height: bounds.height,
+                    },
+                }
+                .screen_position_of(child.position);
+
+                let size = inner_widget
+                    .layout(&mut tree.children[index], renderer, limits)
+                    .size();
+
+                inner_widget
+                    .layout(&mut tree.children[index], renderer, limits)
+                    .move_to(Point {
+                        x: position.x - size.width / 2.0,
+                        y: position.y - size.height / 2.0,
+                    })
+            })
+            .collect();
+
+        iced_core::layout::Node::with_children(bounds, children)
     }
 
     /// Processes a runtime [`Event`].
@@ -285,8 +272,9 @@ where
         let state = match &mut state.state {
             iced_core::widget::tree::State::None => {
                 state.state = iced_core::widget::tree::State::new(WidgetState {
-                    cursor_position: None,
+                    cursor: None,
                     movement: Movement::Idle,
+                    prev_bounds: Rectangle::default(),
                 });
 
                 let iced_core::widget::tree::State::Some(any) = &mut state.state else {
@@ -300,33 +288,30 @@ where
                 .expect("Downcast widget state"),
         };
 
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            cursor: state.cursor,
+            bounds: layout.bounds(),
+        };
+
         match event {
             iced::Event::Mouse(event) => match event {
-                iced::mouse::Event::WheelScrolled { delta } if self.on_change.is_some() => {
-                    let zoom_amount = match delta {
+                iced::mouse::Event::WheelScrolled { delta } if self.on_update.is_some() => {
+                    let amount = match delta {
                         iced::mouse::ScrollDelta::Lines { y, .. } => *y as f64 * 0.5,
                         iced::mouse::ScrollDelta::Pixels { y, .. } => *y as f64 * 0.01,
                     };
 
-                    if let Some(cursor_position) = cursor.position_over(bounds) {
-                        self.viewpoint.zoom_on_position(
-                            zoom_amount,
-                            self.map.tile_size(),
-                            cursor_position,
-                            bounds,
-                        );
+                    if let Some(position) = cursor.position_over(bounds) {
+                        self.viewpoint.zoom_on_point(amount, position, bounds);
                     } else {
-                        self.viewpoint.zoom_on_center(zoom_amount);
+                        self.viewpoint.zoom_on_center(amount);
                     }
                 }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                     if let Some(cursor_position) = cursor.position_over(bounds) {
                         state.movement = Movement::Dragging {
-                            mercator: self.viewpoint.position_in_viewport(
-                                self.map.tile_size(),
-                                cursor_position,
-                                bounds,
-                            ),
+                            mercator: self.viewpoint.position_in_viewport(cursor_position, bounds),
                             cursor: cursor_position,
                         }
                     }
@@ -334,18 +319,13 @@ where
                 iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                     match state.movement {
                         Movement::Dragging { mercator, cursor } => {
-                            if let Some(cursor_position) = state.cursor_position {
-                                let position = self.viewpoint.position_in_viewport(
-                                    self.map.tile_size(),
-                                    cursor_position,
-                                    bounds,
-                                );
+                            if let Some(cursor_position) = state.cursor {
+                                let position =
+                                    self.viewpoint.position_in_viewport(cursor_position, bounds);
                                 if cursor == cursor_position && position == mercator {
-                                    let position = self.viewpoint.position_in_viewport(
-                                        self.map.tile_size(),
-                                        cursor_position,
-                                        bounds,
-                                    );
+                                    let position = self
+                                        .viewpoint
+                                        .position_in_viewport(cursor_position, bounds);
                                     if let Some(on_clicked) = self.on_click {
                                         shell.publish(on_clicked(position.as_geographic()));
                                     }
@@ -359,24 +339,12 @@ where
                     state.movement = Movement::Idle
                 }
                 iced::mouse::Event::CursorMoved { position } => {
-                    state.cursor_position = Some(*position);
-
-                    if let Some(on_hover) = self.on_hover {
-                        let position = self.viewpoint.position_in_viewport(
-                            self.map.tile_size(),
-                            *position,
-                            bounds,
-                        );
-                        shell.publish(on_hover(position.as_geographic()));
-                    }
+                    state.cursor = Some(*position);
 
                     if let Movement::Dragging { mercator, .. } = state.movement {
-                        if self.on_change.is_some() {
-                            let cursor_position = self.viewpoint.position_in_viewport(
-                                self.map.tile_size(),
-                                *position,
-                                bounds,
-                            );
+                        if self.on_update.is_some() {
+                            let cursor_position =
+                                self.viewpoint.position_in_viewport(*position, bounds);
                             let mercator_diff_x = mercator.east_x() - cursor_position.east_x();
                             let mercator_diff_y = mercator.north_y() - cursor_position.north_y();
 
@@ -387,78 +355,101 @@ where
                         }
                     }
                 }
+                iced::mouse::Event::CursorLeft => {
+                    state.cursor = None;
+                }
                 _ => (),
             },
             _ => (),
         }
 
-        let visuals_changed = self.viewpoint != initial_viewpoint || self.prev_bounds != bounds;
+        if let Some(on_update) = self.on_update {
+            let projector = Projector {
+                viewpoint: self.viewpoint,
+                cursor: state.cursor,
+                bounds: layout.bounds(),
+            };
+
+            shell.publish(on_update(projector));
+        }
+
+        let visuals_changed = self.viewpoint != initial_viewpoint || state.prev_bounds != bounds;
+
+        state.prev_bounds = bounds;
 
         if visuals_changed {
             shell.capture_event();
             shell.request_redraw();
-            if let Some(on_position_change) = self.on_change {
-                shell.publish(on_position_change(self.viewpoint));
+            if let Some(on_viewpoint) = self.on_viewpoint {
+                shell.publish(on_viewpoint(self.viewpoint));
             }
         }
 
         if visuals_changed || self.visible_tiles.is_empty() {
             let flood_area = bounds.expand(128);
             self.visible_tiles = self.flood_tiles(&flood_area);
-            self.prev_bounds = bounds;
         }
 
-        // Enqueue loading of missing tiles
-        for (tile_id, _) in &self.visible_tiles {
-            if self.map.should_fetch(&tile_id) {
-                shell.publish((self.mapper)(CacheMessage::LoadTile { id: *tile_id }))
-            }
+        // Construct vector of tiles that should be fetched
+        let mut to_fetch = self
+            .visible_tiles
+            .iter()
+            .filter(|(tile_id, _)| self.map.should_fetch(&tile_id))
+            .collect::<Vec<_>>();
+
+        // Sort them in order of distance to cursor (if available) or viewport center
+        to_fetch.sort_by(|(_, rect1), (_, rect2)| {
+            let center = state.cursor.unwrap_or_else(|| bounds.center());
+            let dist1 = center.distance(rect1.center());
+            let dist2 = center.distance(rect2.center());
+            dist1.partial_cmp(&dist2).unwrap_or(Ordering::Equal)
+        });
+
+        // Enqueue loading of missing tiles with shell
+        for (tile_id, _) in to_fetch {
+            shell.publish((self.mapper)(CacheMessage::LoadTile { id: *tile_id }))
         }
     }
 
     fn draw(
         &self,
-        _tree: &iced_core::widget::Tree,
+        tree: &iced_core::widget::Tree,
         renderer: &mut Renderer,
-        _theme: &Theme,
-        _style: &iced_core::renderer::Style,
+        theme: &Theme,
+        style: &iced_core::renderer::Style,
         layout: iced_core::Layout<'_>,
-        _cursor: iced_core::mouse::Cursor,
+        cursor: iced_core::mouse::Cursor,
         _viewport: &iced::Rectangle,
     ) {
         let bounds = layout.bounds();
 
-        let map_center = self
-            .viewpoint
-            .position
-            .into_pixel_space(self.map.tile_size(), self.viewpoint.zoom.f64());
+        let map_center = self.viewpoint.into_pixel_space();
 
         // Render all queued tiles, TODO move this to update function, cache tiles
         let mut draw_cache = DrawCache::new();
-        for (tile_id, rectangle) in self.visible_tiles.iter().rev() {
+        for (tile_id, rectangle) in self.visible_tiles.iter() {
             match self.map.get(&tile_id) {
                 Some(tile) => {
                     draw_cache.insert(*tile_id, tile, *rectangle);
                 }
                 _ => {
-                    let mut backup_tile_id = *tile_id;
-                    while let Some(next_tile_id) = backup_tile_id.downsample() {
-                        backup_tile_id = next_tile_id;
-                        if let Some(tile) = self.map.get(&backup_tile_id) {
+                    let mut new_tile_id = *tile_id;
+                    while let Some(next_tile_id) = new_tile_id.parent() {
+                        new_tile_id = next_tile_id;
+                        if let Some(tile) = self.map.get(&new_tile_id) {
                             // This tile is already set to be drawn
-                            if draw_cache.contains_key(&backup_tile_id) {
+                            if draw_cache.contains_key(&new_tile_id) {
                                 break;
                             }
 
                             // Determine the offset of this tile relative to the viewport center
-                            let zoom_scale =
-                                2u32.pow((tile_id.zoom() - backup_tile_id.zoom()) as u32);
+                            let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
                             let tile_size = rectangle.width * zoom_scale as f32;
 
                             let projected_position =
-                                backup_tile_id.on_viewport(bounds, tile_size as f64, map_center);
+                                new_tile_id.on_viewport(bounds, tile_size as f64, map_center);
 
-                            draw_cache.insert(backup_tile_id, tile, projected_position);
+                            draw_cache.insert(new_tile_id, tile, projected_position);
 
                             break;
                         }
@@ -470,63 +461,74 @@ where
         // Create new layer to ensure tiles are clipped,
         // and draw tiles in order of zoom level (lowest first)
         renderer.with_layer(bounds, |renderer| {
-            for (_, (handle, rectangle)) in draw_cache.iter() {
-                let image = Image::new(handle);
-                renderer.draw_image(image, rectangle)
-            }
-        });
-
-        // Draw markers - WIP
-        renderer.with_layer(bounds, |renderer| {
-            if let Some(markers) = &self.markers {
-                for marker in *markers {
-                    let position = marker
-                        .as_mercator()
-                        .into_pixel_space(self.map.tile_size(), self.viewpoint.zoom.f64());
-                    let center = self
-                        .viewpoint
-                        .position
-                        .into_pixel_space(self.map.tile_size(), self.viewpoint.zoom.f64());
-
-                    let location = center - position;
-                    let location =
-                        bounds.center() - Vector::new(location.x as f32, location.y as f32);
-
-                    renderer.fill_quad(
-                        Quad {
-                            bounds: Rectangle {
-                                x: location.x - 8.0,
-                                y: location.y - 8.0,
-                                width: 16.0,
-                                height: 16.0,
-                            },
-                            border: iced::Border::default()
-                                .rounded(8.0)
-                                .width(2)
-                                .color(iced::Color::from_rgb(1.0, 0.7, 0.7)),
-                            shadow: iced::Shadow {
-                                color: iced::Color::BLACK.scale_alpha(0.6),
-                                offset: Vector::new(0.0, 2.0),
-                                blur_radius: 8.0,
-                            },
-                            ..Quad::default()
-                        },
-                        iced::Color::from_rgb(1.0, 0.1, 0.1),
-                    );
+            for (handle, bounds) in draw_cache.iter_tiles() {
+                // Draw tiles that are true-sized in a separate pass later
+                // Seemingly Iced (or WGPU) does not respect draw order when mixing filter methods
+                if (bounds.width - self.map.tile_size() as f32).abs() < f32::EPSILON {
+                    continue;
                 }
+
+                let image = Image::new(handle)
+                    .snap(true)
+                    .filter_method(FilterMethod::Linear);
+                renderer.draw_image(image, bounds)
             }
         });
+
+        renderer.with_layer(bounds, |renderer| {
+            for (handle, bounds) in draw_cache.iter_tiles() {
+                // These images were drawn in the previous pass
+                if (bounds.width - self.map.tile_size() as f32).abs() >= f32::EPSILON {
+                    continue;
+                }
+
+                let image = Image::new(handle)
+                    .snap(true)
+                    .filter_method(FilterMethod::Nearest);
+                renderer.draw_image(image, bounds)
+            }
+        });
+
+        // Draw children
+        renderer.with_layer(bounds, |renderer| {
+            self.children
+                .iter()
+                .zip(&tree.children)
+                .zip(layout.children())
+                .for_each(|((global_element, tree), layout)| {
+                    global_element
+                        .element
+                        .as_widget()
+                        .draw(tree, renderer, theme, style, layout, cursor, &bounds);
+                });
+        });
+    }
+
+    fn children(&self) -> Vec<iced_core::widget::Tree> {
+        self.children
+            .iter()
+            .map(|child| iced_core::widget::Tree::new(child.element.as_widget()))
+            .collect()
+    }
+
+    fn diff(&self, tree: &mut iced_core::widget::Tree) {
+        let children: Vec<_> = self
+            .children
+            .iter()
+            .map(|child| child.element.as_widget())
+            .collect();
+        tree.diff_children(children.as_slice());
     }
 
     fn mouse_interaction(
         &self,
-        state: &iced_core::widget::Tree,
+        tree: &iced_core::widget::Tree,
         _layout: iced_core::Layout<'_>,
         _cursor: iced_core::mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> iced_core::mouse::Interaction {
-        let state = match &state.state {
+        let state = match &tree.state {
             iced_core::widget::tree::State::Some(any) => any
                 .downcast_ref::<WidgetState>()
                 .expect("Downcast widget state"),
@@ -540,12 +542,17 @@ where
     }
 }
 
-impl<'a, Message: 'a, Theme, Renderer> From<MapWidget<'a, Message>>
+impl<'a, Message: 'a, Theme: 'a, Renderer: 'a> From<MapWidget<'a, Message, Theme, Renderer>>
     for Element<'a, Message, Theme, Renderer>
 where
     Renderer: iced_core::image::Renderer<Handle = Handle>,
 {
-    fn from(value: MapWidget<'a, Message>) -> Self {
+    fn from(value: MapWidget<'a, Message, Theme, Renderer>) -> Self {
         Self::new(value)
     }
+}
+
+pub struct GlobalElement<'a, Message, Theme, Renderer> {
+    pub element: Element<'a, Message, Theme, Renderer>,
+    pub position: Geographic,
 }

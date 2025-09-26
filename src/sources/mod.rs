@@ -4,7 +4,7 @@ mod geoportal;
 mod mapbox;
 mod openstreetmap;
 
-use crate::tile::TileId;
+use crate::tile_coord::TileCoord;
 pub use geoportal::Geoportal;
 use iced_core::image::Image;
 pub use mapbox::{Mapbox, MapboxStyle};
@@ -20,7 +20,7 @@ pub struct Attribution {
 
 /// Remote tile server definition, source for the [`crate::HttpTiles`].
 pub trait Source: core::fmt::Debug + Send + Sync {
-    fn tile_url(&self, tile_id: TileId) -> String;
+    fn tile_url(&self, tile_id: TileCoord) -> String;
     fn attribution(&self) -> Attribution;
 
     /// Size of each tile, should be a multiple of 256.

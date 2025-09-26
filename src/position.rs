@@ -3,7 +3,7 @@
 //! <https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames>
 //! <https://www.netzwolf.info/osm/tilebrowser.html?lat=51.157800&lon=6.865500&zoom=14>
 
-use crate::tile::TileId;
+use crate::{map_widget::BASE_SIZE, tile_coord::TileCoord};
 use std::f64::consts::PI;
 
 // zoom level   tile coverage  number of tiles  tile size(*) in degrees
@@ -25,7 +25,7 @@ pub struct Mercator {
 }
 
 impl Mercator {
-    pub fn new(east: f64, north: f64) -> Self {
+    pub const fn new(east: f64, north: f64) -> Self {
         Self {
             x: east.clamp(-1., 1.),
             y: north.clamp(-1., 1.),
@@ -47,13 +47,13 @@ impl Mercator {
         self.y
     }
 
-    pub fn from_pixel_space(point: iced::Point<f64>, tile_size: u32, zoom: f64) -> Self {
-        let pixels_half_width = 2f64.powf(zoom - 1.0) * (tile_size as f64);
+    pub fn from_pixel_space(point: iced::Point<f64>, zoom: f64) -> Self {
+        let pixels_half_width = 2f64.powf(zoom - 1.0) * (BASE_SIZE as f64);
         Self::new(point.x / pixels_half_width, point.y / pixels_half_width)
     }
 
-    pub fn into_pixel_space(&self, tile_size: u32, zoom: f64) -> iced::Point<f64> {
-        let pixels_half_width = 2f64.powf(zoom - 1.0) * (tile_size as f64);
+    pub fn into_pixel_space(&self, zoom: f64) -> iced::Point<f64> {
+        let pixels_half_width = 2f64.powf(zoom - 1.0) * (BASE_SIZE as f64);
         iced::Point::new(
             self.east_x() * pixels_half_width,
             self.north_y() * pixels_half_width,
@@ -61,7 +61,7 @@ impl Mercator {
     }
 
     /// Determine the tile id for a given position and zoom level,
-    pub fn tile_id(&self, zoom: u8) -> TileId {
+    pub fn tile_id(&self, zoom: u8) -> TileCoord {
         let x = (self.east_x() + 1.0) / 2.0;
         let y = (self.north_y() + 1.0) / 2.0;
 
@@ -70,7 +70,7 @@ impl Mercator {
         let x = (x * number_of_tiles as f64).floor() as u32;
         let y = (y * number_of_tiles as f64).floor() as u32;
 
-        TileId::new(x, y, zoom)
+        TileCoord::new(x, y, zoom)
     }
 }
 
@@ -84,11 +84,19 @@ pub struct Geographic {
 }
 
 impl Geographic {
-    pub fn new(lon: f64, lat: f64) -> Self {
+    pub const fn new(lon: f64, lat: f64) -> Self {
         Self {
             lon: lon.clamp(-180., 180.),
             lat: lat.clamp(-90., 90.),
         }
+    }
+
+    pub fn from_pixel_space(point: iced::Point<f64>, zoom: f64) -> Self {
+        Mercator::from_pixel_space(point, zoom).as_geographic()
+    }
+
+    pub fn into_pixel_space(&self, zoom: f64) -> iced::Point<f64> {
+        self.as_mercator().into_pixel_space(zoom)
     }
 
     pub fn as_mercator(&self) -> Mercator {
@@ -136,8 +144,8 @@ mod position_tests {
     #[test]
     fn pixel_space_conversion() {
         let position = Mercator::new(1.0, 1.0);
-        let pixel_space = position.into_pixel_space(256, 1.);
-        let converted = Mercator::from_pixel_space(pixel_space, 256, 1.);
+        let pixel_space = position.into_pixel_space(1.);
+        let converted = Mercator::from_pixel_space(pixel_space, 1.);
 
         assert_eq!(position, converted);
 
