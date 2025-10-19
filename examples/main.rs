@@ -71,7 +71,7 @@ impl Application {
                 if let Some(cursor) = projector.cursor_into_pixel_space() {
                     for (position, distance) in &mut self.markers {
                         let diff = projector
-                            .position_into_pixel_space(*position)
+                            .mercator_into_pixel_space(position.as_mercator())
                             .distance(cursor);
                         *distance = diff as f32;
                     }

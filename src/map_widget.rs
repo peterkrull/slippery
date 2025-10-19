@@ -7,6 +7,7 @@ use iced::{Element, Point, Rectangle};
 use iced_core::{
     Image, Widget,
     image::{FilterMethod, Handle},
+    widget::tree::State,
 };
 
 use crate::{
@@ -29,7 +30,6 @@ pub struct MapWidget<'a, Message, Theme, Renderer> {
     children: Vec<GlobalElement<'a, Message, Theme, Renderer>>,
     on_update: Option<fn(Projector) -> Message>,
     on_click: Option<fn(Geographic) -> Message>,
-    on_viewpoint: Option<fn(Viewpoint) -> Message>,
 }
 
 impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
@@ -45,7 +45,6 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
             children: Vec::new(),
             on_update: None,
             on_click: None,
-            on_viewpoint: None,
             mapper,
         }
     }
@@ -66,15 +65,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         }
     }
 
-    /// This message is emitted when a location is left-clicked
-    pub fn on_viewpoint(self, func: fn(Viewpoint) -> Message) -> Self {
-        Self {
-            on_viewpoint: Some(func),
-            ..self
-        }
-    }
-
-    /// Draw a list of [`Geographic`] markers
+    /// Draw a bunch of globally placed elements
     pub fn with_children(
         self,
         children: impl IntoIterator<Item = GlobalElement<'a, Message, Theme, Renderer>>,
@@ -160,8 +151,9 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 enum Movement {
+    #[default]
     Idle,
     Dragging {
         mercator: Mercator,
@@ -169,11 +161,27 @@ enum Movement {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct WidgetState {
-    cursor: Option<iced::Point>,
     movement: Movement,
     prev_bounds: Rectangle,
+    cursor: Option<Point>,
+}
+
+impl WidgetState {
+    /// Get a mutable reference to the widget state,
+    /// initializing it, if it is not already.
+    pub fn get_mut(state: &mut State) -> &mut WidgetState {
+        match state {
+            State::None => {
+                *state = State::new(WidgetState::default());
+                state.downcast_mut::<WidgetState>()
+            }
+            State::Some(any) => any
+                .downcast_mut::<WidgetState>()
+                .expect("Widget state of incorrect type"),
+        }
+    }
 }
 
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -189,52 +197,28 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut iced_core::widget::Tree,
         renderer: &Renderer,
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
-        let state = match &mut tree.state {
-            iced_core::widget::tree::State::None => {
-                tree.state = iced_core::widget::tree::State::new(WidgetState {
-                    cursor: None,
-                    movement: Movement::Idle,
-                    prev_bounds: Rectangle::default(),
-                });
-
-                let iced_core::widget::tree::State::Some(any) = &mut tree.state else {
-                    panic!("Must happen")
-                };
-                any.downcast_mut::<WidgetState>()
-                    .expect("Downcast widget state")
-            }
-            iced_core::widget::tree::State::Some(any) => any
-                .downcast_mut::<WidgetState>()
-                .expect("Downcast widget state"),
-        };
-
-        let state = state.clone();
-
+        let state = WidgetState::get_mut(&mut tree.state);
         let bounds = limits.max();
+
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            cursor: state.cursor,
+            bounds: state.prev_bounds,
+        };
 
         let children = self
             .children
-            .iter()
+            .iter_mut()
             .enumerate()
             .map(|(index, child)| {
-                let inner_widget = child.element.as_widget();
+                let inner_widget = child.element.as_widget_mut();
 
-                let position = Projector {
-                    viewpoint: self.viewpoint,
-                    cursor: state.cursor,
-                    bounds: Rectangle {
-                        x: 0.0,
-                        y: 0.0,
-                        width: bounds.width,
-                        height: bounds.height,
-                    },
-                }
-                .screen_position_of(child.position);
+                let position = projector.mercator_into_screen_space(child.position.as_mercator());
 
                 let size = inner_widget
                     .layout(&mut tree.children[index], renderer, limits)
@@ -252,12 +236,9 @@ where
         iced_core::layout::Node::with_children(bounds, children)
     }
 
-    /// Processes a runtime [`Event`].
-    ///
-    /// By default, it does nothing.
     fn update(
         &mut self,
-        state: &mut iced_core::widget::Tree,
+        tree: &mut iced_core::widget::Tree,
         event: &iced::Event,
         layout: iced_core::Layout<'_>,
         cursor: iced_core::mouse::Cursor,
@@ -266,28 +247,11 @@ where
         shell: &mut iced_core::Shell<'_, Message>,
         _viewport: &iced::Rectangle,
     ) {
-        let bounds = layout.bounds();
-        let initial_viewpoint = self.viewpoint;
+        let state = WidgetState::get_mut(&mut tree.state);
+        state.prev_bounds = layout.bounds();
 
-        let state = match &mut state.state {
-            iced_core::widget::tree::State::None => {
-                state.state = iced_core::widget::tree::State::new(WidgetState {
-                    cursor: None,
-                    movement: Movement::Idle,
-                    prev_bounds: Rectangle::default(),
-                });
-
-                let iced_core::widget::tree::State::Some(any) = &mut state.state else {
-                    panic!("Must happen")
-                };
-                any.downcast_mut::<WidgetState>()
-                    .expect("Downcast widget state")
-            }
-            iced_core::widget::tree::State::Some(any) => any
-                .downcast_mut::<WidgetState>()
-                .expect("Downcast widget state"),
-        };
-
+        // For doing projections during the update, but also holds some
+        // information about the pre-update state of the viewing area.
         let projector = Projector {
             viewpoint: self.viewpoint,
             cursor: state.cursor,
@@ -302,16 +266,17 @@ where
                         iced::mouse::ScrollDelta::Pixels { y, .. } => *y as f64 * 0.01,
                     };
 
-                    if let Some(position) = cursor.position_over(bounds) {
-                        self.viewpoint.zoom_on_point(amount, position, bounds);
+                    if let Some(position) = cursor.position_over(projector.bounds) {
+                        self.viewpoint
+                            .zoom_on_point(amount, position, projector.bounds);
                     } else {
                         self.viewpoint.zoom_on_center(amount);
                     }
                 }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
-                    if let Some(cursor_position) = cursor.position_over(bounds) {
+                    if let Some(cursor_position) = cursor.position_over(projector.bounds) {
                         state.movement = Movement::Dragging {
-                            mercator: self.viewpoint.position_in_viewport(cursor_position, bounds),
+                            mercator: projector.mercator_from_screen_space(cursor_position),
                             cursor: cursor_position,
                         }
                     }
@@ -319,13 +284,10 @@ where
                 iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                     match state.movement {
                         Movement::Dragging { mercator, cursor } => {
-                            if let Some(cursor_position) = state.cursor {
+                            if let Some(cursor_position) = projector.cursor {
                                 let position =
-                                    self.viewpoint.position_in_viewport(cursor_position, bounds);
+                                    projector.mercator_from_screen_space(cursor_position);
                                 if cursor == cursor_position && position == mercator {
-                                    let position = self
-                                        .viewpoint
-                                        .position_in_viewport(cursor_position, bounds);
                                     if let Some(on_clicked) = self.on_click {
                                         shell.publish(on_clicked(position.as_geographic()));
                                     }
@@ -343,15 +305,9 @@ where
 
                     if let Movement::Dragging { mercator, .. } = state.movement {
                         if self.on_update.is_some() {
-                            let cursor_position =
-                                self.viewpoint.position_in_viewport(*position, bounds);
-                            let mercator_diff_x = mercator.east_x() - cursor_position.east_x();
-                            let mercator_diff_y = mercator.north_y() - cursor_position.north_y();
-
-                            self.viewpoint.position = Mercator::new(
-                                self.viewpoint.position.east_x() + mercator_diff_x,
-                                self.viewpoint.position.north_y() + mercator_diff_y,
-                            );
+                            let cursor_position = projector.mercator_from_screen_space(*position);
+                            let mercator_delta = mercator - cursor_position;
+                            self.viewpoint.position = self.viewpoint.position + mercator_delta;
                         }
                     }
                 }
@@ -363,30 +319,14 @@ where
             _ => (),
         }
 
-        if let Some(on_update) = self.on_update {
-            let projector = Projector {
-                viewpoint: self.viewpoint,
-                cursor: state.cursor,
-                bounds: layout.bounds(),
-            };
-
-            shell.publish(on_update(projector));
-        }
-
-        let visuals_changed = self.viewpoint != initial_viewpoint || state.prev_bounds != bounds;
-
-        state.prev_bounds = bounds;
-
-        if visuals_changed {
+        // If the viewpoint or bounds changed for this update, we need to redraw
+        if projector.viewpoint != self.viewpoint
+            || projector.bounds != state.prev_bounds
+            || self.visible_tiles.is_empty()
+        {
             shell.capture_event();
             shell.request_redraw();
-            if let Some(on_viewpoint) = self.on_viewpoint {
-                shell.publish(on_viewpoint(self.viewpoint));
-            }
-        }
-
-        if visuals_changed || self.visible_tiles.is_empty() {
-            let flood_area = bounds.expand(128);
+            let flood_area = state.prev_bounds.expand(128);
             self.visible_tiles = self.flood_tiles(&flood_area);
         }
 
@@ -399,7 +339,7 @@ where
 
         // Sort them in order of distance to cursor (if available) or viewport center
         to_fetch.sort_by(|(_, rect1), (_, rect2)| {
-            let center = state.cursor.unwrap_or_else(|| bounds.center());
+            let center = state.cursor.unwrap_or_else(|| state.prev_bounds.center());
             let dist1 = center.distance(rect1.center());
             let dist2 = center.distance(rect2.center());
             dist1.partial_cmp(&dist2).unwrap_or(Ordering::Equal)
@@ -408,6 +348,15 @@ where
         // Enqueue loading of missing tiles with shell
         for (tile_id, _) in to_fetch {
             shell.publish((self.mapper)(CacheMessage::LoadTile { id: *tile_id }))
+        }
+
+        if let Some(on_update) = self.on_update {
+            let projector = Projector {
+                viewpoint: self.viewpoint,
+                cursor: state.cursor,
+                bounds: state.prev_bounds,
+            };
+            shell.publish(on_update(projector));
         }
     }
 
@@ -462,14 +411,14 @@ where
         // and draw tiles in order of zoom level (lowest first)
         renderer.with_layer(bounds, |renderer| {
             for (handle, bounds) in draw_cache.iter_tiles() {
-                // Draw tiles that are true-sized in a separate pass later
+                // Draw tiles that are true-sized in a separate pass later.
                 // Seemingly Iced (or WGPU) does not respect draw order when mixing filter methods
                 if (bounds.width - self.map.tile_size() as f32).abs() < f32::EPSILON {
                     continue;
                 }
 
                 let image = Image::new(handle)
-                    .snap(true)
+                    .snap(false)
                     .filter_method(FilterMethod::Linear);
                 renderer.draw_image(image, bounds)
             }
@@ -489,7 +438,7 @@ where
             }
         });
 
-        // Draw children
+        // Draw children -> GlobalElement
         renderer.with_layer(bounds, |renderer| {
             self.children
                 .iter()
@@ -529,7 +478,7 @@ where
         _renderer: &Renderer,
     ) -> iced_core::mouse::Interaction {
         let state = match &tree.state {
-            iced_core::widget::tree::State::Some(any) => any
+            State::Some(any) => any
                 .downcast_ref::<WidgetState>()
                 .expect("Downcast widget state"),
             _ => return iced_core::mouse::Interaction::Idle,
@@ -552,6 +501,7 @@ where
     }
 }
 
+/// Like a regular [`Element`] but tied to a specific [`Geographic`] coordinate
 pub struct GlobalElement<'a, Message, Theme, Renderer> {
     pub element: Element<'a, Message, Theme, Renderer>,
     pub position: Geographic,
