@@ -420,7 +420,7 @@ where
                 let image = Image::new(handle)
                     .snap(false)
                     .filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, bounds)
+                renderer.draw_image(image, bounds, bounds)
             }
         });
 
@@ -434,7 +434,7 @@ where
                 let image = Image::new(handle)
                     .snap(true)
                     .filter_method(FilterMethod::Nearest);
-                renderer.draw_image(image, bounds)
+                renderer.draw_image(image, bounds, bounds)
             }
         });
 
