@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use iced::{Element, Point, Rectangle};
+use iced::{Element, Point, Rectangle, Vector};
 use iced_core::{
     Image, Widget,
     image::{FilterMethod, Handle},
@@ -154,7 +154,14 @@ enum Movement {
     Idle,
     Dragging {
         mercator: Mercator,
-        cursor: iced::Point<f32>,
+        start_cursor: iced::Point<f32>,
+        last_cursor: iced::Point<f32>,
+        last_time: Instant,
+        velocity: Vector,
+    },
+    Momentum {
+        velocity: Vector,
+        last_time: Instant,
     },
 }
 
@@ -162,7 +169,6 @@ enum Movement {
 struct WidgetState {
     projector: Option<Projector>,
     movement: Movement,
-    prev_bounds: Rectangle,
     cursor: Option<Point>,
     zoom: Option<ZoomState>,
 }
@@ -209,12 +215,17 @@ where
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
         let state = WidgetState::get_mut(&mut tree.state);
-        let bounds = limits.max();
+        let size = limits.max();
 
         let projector = Projector {
             viewpoint: self.viewpoint,
             cursor: state.cursor,
-            bounds: state.prev_bounds,
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: size.width,
+                height: size.height,
+            },
         };
 
         let children = self
@@ -239,7 +250,7 @@ where
             })
             .collect();
 
-        iced_core::layout::Node::with_children(bounds, children)
+        iced_core::layout::Node::with_children(size, children)
     }
 
     fn update(
@@ -254,14 +265,26 @@ where
         _viewport: &iced::Rectangle,
     ) {
         let state = WidgetState::get_mut(&mut tree.state);
-        state.prev_bounds = layout.bounds();
+        let bounds = layout.bounds();
+        let prev_projector = state.projector.clone();
+
+        // Check if viewpoint or bounds changed since last time
+        let mut needs_redraw = false;
+        if let Some(prev_projector) = &prev_projector {
+            if prev_projector.viewpoint != self.viewpoint || prev_projector.bounds != bounds {
+                needs_redraw = true;
+            }
+        } else {
+            // First run
+            needs_redraw = true;
+        }
 
         // For doing projections during the update, but also holds some
         // information about the pre-update state of the viewing area.
         let projector = state.projector.insert(Projector {
             viewpoint: self.viewpoint,
             cursor: state.cursor,
-            bounds: layout.bounds(),
+            bounds,
         });
 
         match event {
@@ -285,14 +308,46 @@ where
                             self.viewpoint.zoom_on_center(zoom_amt);
                         }
 
-                        shell.request_redraw();
+                        projector.viewpoint = self.viewpoint;
+
                     } else {
                         state.zoom = None;
                     }
 
-                    shell.capture_event();
+                    needs_redraw = true;
                 }
 
+                if let Movement::Momentum {
+                    velocity,
+                    last_time,
+                } = &mut state.movement
+                {
+                    let delta = (*at - *last_time).as_secs_f32();
+                    *last_time = *at;
+
+                    // Apply velocity to viewpoint
+                    let screen_delta = *velocity * delta;
+                    let current_center = bounds.center();
+                    let new_center_screen = current_center - screen_delta;
+                    
+                    let center_mercator = projector.mercator_from_screen_space(current_center);
+                    let target_mercator = projector.mercator_from_screen_space(new_center_screen);
+                    
+                    let mercator_delta = target_mercator - center_mercator;
+                    
+                    self.viewpoint.position = self.viewpoint.position + mercator_delta;
+
+                    // Decay velocity
+                    let tau = 0.2;
+                    let alpha = tau / (tau + delta);
+                    *velocity = *velocity * alpha;
+
+                    if velocity.x.abs() < 15.0 && velocity.y.abs() < 15.0 {
+                        state.movement = Movement::Idle;
+                    }
+
+                    needs_redraw = true;
+                }
             }
             iced::Event::Mouse(event) => match event {
                 iced::mouse::Event::WheelScrolled { delta } if self.on_update.is_some() => {
@@ -317,42 +372,81 @@ where
                     }
 
                     state.zoom = Some(zoom);
+
+                    needs_redraw = true;
                 }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                     if let Some(cursor_position) = cursor.position_over(projector.bounds) {
                         state.movement = Movement::Dragging {
                             mercator: projector.mercator_from_screen_space(cursor_position),
-                            cursor: cursor_position,
+                            start_cursor: cursor_position,
+                            last_cursor: cursor_position,
+                            last_time: Instant::now(),
+                            velocity: Vector::new(0.0, 0.0),
                         }
                     }
                 }
                 iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                     match state.movement {
-                        Movement::Dragging { cursor, .. } => {
+                        Movement::Dragging {
+                            start_cursor,
+                            velocity,
+                            ..
+                        } => {
                             if let Some(cursor_position) = projector.cursor {
-                                let position =
-                                    projector.mercator_from_screen_space(cursor_position);
-                                if cursor == cursor_position {
-                                    if let Some(on_clicked) = self.on_click {
+                                if let Some(on_clicked) = self.on_click {
+                                    if start_cursor == cursor_position {
+                                        let position =
+                                            projector.mercator_from_screen_space(cursor_position);
+
                                         shell.publish(on_clicked(position.as_geographic()));
                                     }
                                 }
                             }
+
+                            if velocity.x.abs() > 10.0 || velocity.y.abs() > 10.0 {
+                                state.movement = Movement::Momentum {
+                                    velocity,
+                                    last_time: Instant::now(),
+                                };
+                                shell.request_redraw();
+                            } else {
+                                state.movement = Movement::Idle;
+                            }
                         }
                         _ => (),
                     }
-
-                    // Temporary WIP
-                    state.movement = Movement::Idle
                 }
                 iced::mouse::Event::CursorMoved { position } => {
                     state.cursor = Some(*position);
 
-                    if let Movement::Dragging { mercator, .. } = state.movement {
+                    if let Movement::Dragging {
+                        mercator,
+                        last_cursor,
+                        last_time,
+                        velocity,
+                        ..
+                    } = &mut state.movement
+                    {
                         if self.on_update.is_some() {
                             let cursor_position = projector.mercator_from_screen_space(*position);
-                            let mercator_delta = mercator - cursor_position;
+                            let mercator_delta = *mercator - cursor_position;
                             self.viewpoint.position = self.viewpoint.position + mercator_delta;
+
+                            // Calculate velocity
+                            let now = Instant::now();
+                            let delta_time = (now - *last_time).as_secs_f32();
+                            if delta_time > 0.0 {
+                                let delta_pos = *position - *last_cursor;
+                                let current_velocity = Vector::new(delta_pos.x, delta_pos.y) / delta_time;
+                                
+                                // Smooth velocity
+                                *velocity = *velocity * 0.5 + current_velocity * 0.5;
+                                *last_cursor = *position;
+                                *last_time = now;
+                            }
+
+                            needs_redraw = true;
                         }
                     }
                 }
@@ -364,15 +458,15 @@ where
             _ => (),
         }
 
-        // If the viewpoint or bounds changed for this update, we need to redraw
-        if projector.viewpoint != self.viewpoint
-            || projector.bounds != state.prev_bounds
-            || self.visible_tiles.is_empty()
-        {
+        // Ensure visible tiles are calculated
+        if self.visible_tiles.is_empty() {
+            let flood_area = bounds.expand(128);
+            self.visible_tiles = self.flood_tiles(&flood_area);
+        }
+
+        if needs_redraw {
             shell.capture_event();
             shell.request_redraw();
-            let flood_area = state.prev_bounds.expand(128);
-            self.visible_tiles = self.flood_tiles(&flood_area);
         }
 
         // Construct vector of tiles that should be fetched
@@ -384,7 +478,7 @@ where
 
         // Sort them in order of distance to cursor (if available) or viewport center
         to_fetch.sort_by(|(_, rect1), (_, rect2)| {
-            let center = state.cursor.unwrap_or_else(|| state.prev_bounds.center());
+            let center = state.cursor.unwrap_or_else(|| bounds.center());
             let dist1 = center.distance(rect1.center());
             let dist2 = center.distance(rect2.center());
             dist1.partial_cmp(&dist2).unwrap_or(Ordering::Equal)
@@ -396,12 +490,22 @@ where
         }
 
         if let Some(on_update) = self.on_update {
-            let projector = state.projector.insert(Projector {
+            let new_projector = Projector {
                 viewpoint: self.viewpoint,
                 cursor: state.cursor,
-                bounds: state.prev_bounds,
-            });
-            shell.publish(on_update(projector.clone()));
+                bounds,
+            };
+
+            let should_publish = match &prev_projector {
+                Some(prev) => *prev != new_projector,
+                None => true,
+            };
+
+            if should_publish {
+                shell.publish(on_update(new_projector.clone()));
+            }
+
+            state.projector = Some(new_projector);
         }
     }
 
@@ -545,6 +649,7 @@ where
         match state.movement {
             Movement::Idle => iced_core::mouse::Interaction::Idle,
             Movement::Dragging { .. } => iced_core::mouse::Interaction::Grabbing,
+            Movement::Momentum { .. } => iced_core::mouse::Interaction::Idle,
         }
     }
 }
