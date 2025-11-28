@@ -1,6 +1,4 @@
-use iced::{Rectangle, Vector};
-
-use crate::position::total_tiles;
+use crate::position::{Mercator, total_tiles};
 
 /// Identifies the tile in the tile grid.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -49,36 +47,12 @@ impl TileCoord {
         self.zoom
     }
 
-    /// Tile position (in pixels) on the "World bitmap".
-    pub fn project(&self, tile_size: f64) -> iced::Point<f64> {
-        let total_tiles = 2u32.pow(self.zoom as u32);
-        iced::Point::new(
-            (self.x as f64 - total_tiles as f64 / 2.0) * tile_size,
-            (self.y as f64 - total_tiles as f64 / 2.0) * tile_size,
+    pub fn to_mercator(&self) -> Mercator {
+        let total_tiles = 2u32.pow(self.zoom as u32) as f64;
+        Mercator::new(
+            (self.x as f64 / total_tiles) * 2.0 - 1.0,
+            (self.y as f64 / total_tiles) * 2.0 - 1.0,
         )
-    }
-
-    pub fn on_viewport(
-        &self,
-        viewport: Rectangle,
-        tile_size: f64,
-        position: iced::Point<f64>,
-    ) -> Rectangle {
-        // Determine the offset of this tile relative to the viewport center
-        let tile_bitmap_position = self.project(tile_size);
-        let tile_center_offset = tile_bitmap_position - position;
-        let tile_center_offset =
-            Vector::new(tile_center_offset.x as f32, tile_center_offset.y as f32);
-
-        // The absolute on-screen position of the top-left corner
-        let tile_screen_position = viewport.center() + tile_center_offset;
-
-        Rectangle {
-            x: tile_screen_position.x as f32,
-            y: tile_screen_position.y as f32,
-            width: tile_size as f32,
-            height: tile_size as f32,
-        }
     }
 
     // Obtain a lower-zoom level TileID that covers this tile.

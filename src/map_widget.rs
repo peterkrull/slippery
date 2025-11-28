@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, hash_map::Entry},
+    time::Instant,
 };
 
 use iced::{Element, Point, Rectangle};
@@ -93,19 +94,8 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
 
         let central_tile_id = self.viewpoint.position.tile_id(scaled_zoom.round() as u8);
 
-        let map_center = self
-            .viewpoint
-            .position
-            .into_pixel_space(self.viewpoint.zoom.f64());
-
         // Recursively fill up the `tiles` map
-        self.flood_tiles_inner(
-            viewport,
-            central_tile_id,
-            map_center,
-            corrected_tile_size,
-            &mut tiles,
-        );
+        self.flood_tiles_inner(viewport, central_tile_id, corrected_tile_size, &mut tiles);
 
         // Convert the map into a vec of id-uv pairs
         tiles
@@ -118,7 +108,6 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         &self,
         viewport: &Rectangle,
         tile_id: TileCoord,
-        map_center: iced::Point<f64>,
         corrected_tile_size: f64,
         tiles: &mut HashMap<TileCoord, Option<Rectangle>>,
     ) {
@@ -128,7 +117,21 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         };
 
         // Determine the offset of this tile relative to the viewport center
-        let projected_position = tile_id.on_viewport(*viewport, corrected_tile_size, map_center);
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            cursor: None,
+            bounds: *viewport,
+        };
+
+        let tile_mercator = tile_id.to_mercator();
+        let screen_pos = projector.mercator_into_screen_space(tile_mercator);
+
+        let projected_position = Rectangle {
+            x: screen_pos.x,
+            y: screen_pos.y,
+            width: corrected_tile_size as f32,
+            height: corrected_tile_size as f32,
+        };
 
         // Accept the tile if it intersects the viewport
         if viewport.intersects(&projected_position) {
@@ -140,13 +143,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
 
         // Recurse using all valid neighbors
         for &neigbor_tile_id in tile_id.neighbors().iter().flatten() {
-            self.flood_tiles_inner(
-                viewport,
-                neigbor_tile_id,
-                map_center,
-                corrected_tile_size,
-                tiles,
-            );
+            self.flood_tiles_inner(viewport, neigbor_tile_id, corrected_tile_size, tiles);
         }
     }
 }
@@ -163,9 +160,18 @@ enum Movement {
 
 #[derive(Clone, Default)]
 struct WidgetState {
+    projector: Option<Projector>,
     movement: Movement,
     prev_bounds: Rectangle,
     cursor: Option<Point>,
+    zoom: Option<ZoomState>,
+}
+
+#[derive(Debug, Clone)]
+struct ZoomState {
+    prev_time: Instant,
+    point: Option<Mercator>,
+    decay: f32,
 }
 
 impl WidgetState {
@@ -252,26 +258,65 @@ where
 
         // For doing projections during the update, but also holds some
         // information about the pre-update state of the viewing area.
-        let projector = Projector {
+        let projector = state.projector.insert(Projector {
             viewpoint: self.viewpoint,
             cursor: state.cursor,
             bounds: layout.bounds(),
-        };
+        });
 
         match event {
+            iced::Event::Window(iced::window::Event::RedrawRequested(at)) => {
+                if let Some(zoom) = state.zoom.as_mut() {
+                    let delta = (*at - zoom.prev_time).as_secs_f32();
+                    let tau = 0.1;
+                    let alpha = tau / (tau + delta);
+
+                    zoom.prev_time = *at;
+                    zoom.decay *= alpha;
+
+                    let zoom_amt = (delta * zoom.decay) as f64;
+
+                    if zoom.decay.abs() > 0.005 {
+                        if let Some(position) = zoom.point {
+                            let position = projector.mercator_into_screen_space(position);
+                            self.viewpoint
+                                .zoom_on_point(zoom_amt, position, projector.bounds);
+                        } else {
+                            self.viewpoint.zoom_on_center(zoom_amt);
+                        }
+
+                        shell.request_redraw();
+                    } else {
+                        state.zoom = None;
+                    }
+
+                    shell.capture_event();
+                }
+
+            }
             iced::Event::Mouse(event) => match event {
                 iced::mouse::Event::WheelScrolled { delta } if self.on_update.is_some() => {
                     let amount = match delta {
-                        iced::mouse::ScrollDelta::Lines { y, .. } => *y as f64 * 0.5,
-                        iced::mouse::ScrollDelta::Pixels { y, .. } => *y as f64 * 0.01,
+                        iced::mouse::ScrollDelta::Lines { y, .. } => *y as f64 * 10.0,
+                        iced::mouse::ScrollDelta::Pixels { y, .. } => *y as f64 * 1.0,
+                    };
+
+                    let mut zoom = ZoomState {
+                        prev_time: Instant::now(),
+                        point: None,
+                        decay: amount as f32,
                     };
 
                     if let Some(position) = cursor.position_over(projector.bounds) {
-                        self.viewpoint
-                            .zoom_on_point(amount, position, projector.bounds);
-                    } else {
-                        self.viewpoint.zoom_on_center(amount);
+                        zoom.point = Some(projector.mercator_from_screen_space(position));
                     }
+
+                    // Carry over any existing zoom momentum
+                    if let Some(existing_zoom) = state.zoom.take() {
+                        zoom.decay += existing_zoom.decay;
+                    }
+
+                    state.zoom = Some(zoom);
                 }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                     if let Some(cursor_position) = cursor.position_over(projector.bounds) {
@@ -283,11 +328,11 @@ where
                 }
                 iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                     match state.movement {
-                        Movement::Dragging { mercator, cursor } => {
+                        Movement::Dragging { cursor, .. } => {
                             if let Some(cursor_position) = projector.cursor {
                                 let position =
                                     projector.mercator_from_screen_space(cursor_position);
-                                if cursor == cursor_position && position == mercator {
+                                if cursor == cursor_position {
                                     if let Some(on_clicked) = self.on_click {
                                         shell.publish(on_clicked(position.as_geographic()));
                                     }
@@ -351,12 +396,12 @@ where
         }
 
         if let Some(on_update) = self.on_update {
-            let projector = Projector {
+            let projector = state.projector.insert(Projector {
                 viewpoint: self.viewpoint,
                 cursor: state.cursor,
                 bounds: state.prev_bounds,
-            };
-            shell.publish(on_update(projector));
+            });
+            shell.publish(on_update(projector.clone()));
         }
     }
 
@@ -372,7 +417,7 @@ where
     ) {
         let bounds = layout.bounds();
 
-        let map_center = self.viewpoint.into_pixel_space();
+        println!("Drawing: {:?}", Instant::now());
 
         // Render all queued tiles, TODO move this to update function, cache tiles
         let mut draw_cache = DrawCache::new();
@@ -395,8 +440,21 @@ where
                             let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
                             let tile_size = rectangle.width * zoom_scale as f32;
 
-                            let projected_position =
-                                new_tile_id.on_viewport(bounds, tile_size as f64, map_center);
+                            let projector = Projector {
+                                viewpoint: self.viewpoint,
+                                cursor: None,
+                                bounds,
+                            };
+
+                            let tile_mercator = new_tile_id.to_mercator();
+                            let screen_pos = projector.mercator_into_screen_space(tile_mercator);
+
+                            let projected_position = Rectangle {
+                                x: screen_pos.x,
+                                y: screen_pos.y,
+                                width: tile_size,
+                                height: tile_size,
+                            };
 
                             draw_cache.insert(new_tile_id, tile, projected_position);
 

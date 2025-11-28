@@ -41,6 +41,8 @@ struct Application {
     markers: Vec<(Geographic, f32)>,
 }
 
+const DISTANCE: f32 = 60.0;
+
 impl Application {
     pub fn boot() -> (Self, Task<Message>) {
         (
@@ -53,7 +55,7 @@ impl Application {
                 },
                 markers: Vec::new(),
             },
-            // This ensures we always have something to fall back on when rendering.
+            // This should ensure we always have something to fall back on when rendering.
             Task::done(Message::Cache(CacheMessage::LoadTile {
                 id: TileCoord::ZERO,
             })),
@@ -104,7 +106,7 @@ impl Application {
                         element: container(
                             Button::new(Text::new(index.to_string())).on_press(Message::Button),
                         )
-                        .style(if *distance < 75. {
+                        .style(if *distance < DISTANCE {
                             container::success
                         } else {
                             container::secondary
@@ -119,30 +121,33 @@ impl Application {
         let mut stack = iced::widget::Stack::new().push(map);
 
         if !self.markers.is_empty() {
-            let content =
-                iced::widget::container(
-                    iced::widget::container(
-                        column(self.markers.iter().enumerate().map(
-                            |(index, (marker, distance))| {
-                                row![
-                                    Button::new("X")
-                                        .on_press(Message::Marker(MarkerOp::Remove(index))),
-                                    text(format!(
-                                        "[{index}] {marker:.5?}, ({distance} pixels away)"
-                                    ))
-                                ]
-                                .spacing(10.)
-                                .align_y(Vertical::Center)
-                                .into()
-                            },
-                        ))
-                        .spacing(10.)
-                        .width(370.),
-                    )
-                    .style(container::bordered_box)
-                    .padding(15.),
-                )
-                .padding(20.);
+            let content = container(
+                container(column(self.markers.iter().enumerate().map(
+                    |(index, (marker, distance))| {
+                        container(
+                            row![
+                                Button::new("X").on_press(Message::Marker(MarkerOp::Remove(index))),
+                                text(format!(
+                                    "[{index}] {marker:.5?}, ({distance:.03} pixels away)"
+                                ))
+                            ]
+                            .spacing(10.)
+                            .align_y(Vertical::Center),
+                        )
+                        .padding(10.)
+                        .style(if *distance < DISTANCE {
+                            container::secondary
+                        } else {
+                            container::transparent
+                        })
+                        .width(360)
+                        .into()
+                    },
+                )))
+                .style(container::bordered_box)
+                .padding(15.),
+            )
+            .padding(20.);
 
             stack = stack.push(content);
         };
