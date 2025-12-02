@@ -5,14 +5,20 @@ use iced_core::image::Handle;
 
 use crate::tile_coord::TileCoord;
 
-pub(crate) struct DrawCache<'a> {
-    maps: HashMap<u8, HashMap<(u32, u32), (&'a Handle, Rectangle)>>,
+pub(crate) struct DrawCache {
+    pub(crate) maps: HashMap<u8, HashMap<(u32, u32), (Handle, Rectangle)>>,
 }
 
-impl<'a> DrawCache<'a> {
+impl Default for DrawCache {
+    fn default() -> Self {
+        DrawCache::new()
+    }
+}
+
+impl DrawCache {
     pub fn new() -> Self {
         Self {
-            maps: HashMap::with_capacity(4),
+            maps: HashMap::with_capacity(2),
         }
     }
 
@@ -27,9 +33,9 @@ impl<'a> DrawCache<'a> {
     pub fn insert(
         &mut self,
         tile_id: TileCoord,
-        value: &'a Handle,
+        value: Handle,
         rectangle: Rectangle,
-    ) -> Option<(&'a Handle, Rectangle)> {
+    ) -> Option<(Handle, Rectangle)> {
         self.maps
             .entry(tile_id.zoom())
             .or_insert_with(|| HashMap::with_capacity(25))
@@ -37,13 +43,13 @@ impl<'a> DrawCache<'a> {
     }
 
     /// Iterate through all tiles in ascending zoom order
-    pub fn iter_tiles(&self) -> impl Iterator<Item = (&'a Handle, Rectangle)> {
+    pub fn iter_tiles(&self) -> impl Iterator<Item = (&Handle, Rectangle)> {
         let mut zooms: Vec<&u8> = self.maps.keys().collect();
         zooms.sort();
 
         zooms.into_iter().flat_map(|zoom| {
             let map = &self.maps[zoom];
-            map.iter().map(move |(_, v)| *v)
+            map.iter().map(move |(_, (h, r))| (h, *r))
         })
     }
 }

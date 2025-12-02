@@ -1,7 +1,5 @@
 use iced::{
-    self, Element, Task,
-    alignment::Vertical,
-    widget::{Button, Text, column, container, row, text},
+    self, Element, Task, Theme, alignment::Vertical, widget::{Button, Text, column, container, row, text}
 };
 use slippery::{
     CacheMessage, Geographic, GlobalElement, MapWidget, Projector, TileCache, TileCoord, Viewpoint,
@@ -16,6 +14,7 @@ fn main() {
 
     iced::application(Application::boot, Application::update, Application::view)
         .title("Slippery")
+        .theme(Theme::Dark)
         .run()
         .unwrap();
 }
@@ -144,7 +143,19 @@ impl Application {
                         .into()
                     },
                 )))
-                .style(container::bordered_box)
+                .style(|theme| {
+                    let palette = theme.extended_palette();
+                    container::Style {
+                        background: Some(palette.background.weak.color.into()),
+                        text_color: Some(palette.background.weak.text),
+                        border: iced::Border {
+                            width: 1.0,
+                            radius: 8.0.into(),
+                            color: palette.background.weak.color,
+                        },
+                        ..container::Style::default()
+                    }
+                })
                 .padding(15.),
             )
             .padding(20.);
