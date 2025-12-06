@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::Rectangle;
+use iced::{Animation, Rectangle};
 use iced_core::image::{Allocation, Handle};
 
 use crate::tile_coord::TileCoord;
@@ -13,6 +13,12 @@ pub struct DrawData {
     pub handle: Handle,
     pub rectangle: Rectangle,
     pub allocation: Allocation,
+    pub state: State,
+}
+
+enum State {
+    Remove,
+    Active(Animation<bool>),
 }
 
 impl Default for DrawCache {
@@ -28,6 +34,15 @@ impl DrawCache {
         }
     }
 
+    /// Clean up any tile which is no longer viewable at all.
+    pub fn retain_intersections(&mut self, bounds: &Rectangle) {
+        for (_, tiles) in self.maps.iter_mut() {
+            tiles.retain(|_, draw_data| draw_data.rectangle.intersects(&bounds));
+        }
+
+        self.maps.retain(|_, map|!map.is_empty());
+    }
+
     /// Remove a tiles handle and allocation for reuse
     pub fn remove(&mut self, tile_id: &TileCoord) -> Option<(Handle, Allocation)> {
         self.maps
@@ -37,6 +52,14 @@ impl DrawCache {
                     .remove(&tile_id.x_y())
                     .map(|data| (data.handle, data.allocation))
             })
+            .flatten()
+    }
+
+    /// Check whether the cache contains some tile
+    pub fn get_mut(&mut self, tile_id: &TileCoord) -> Option<&mut DrawData> {
+        self.maps
+            .get_mut(&tile_id.zoom())
+            .map(|inner| inner.get_mut(&tile_id.x_y()))
             .flatten()
     }
 
@@ -54,6 +77,7 @@ impl DrawCache {
         handle: Handle,
         rectangle: Rectangle,
         allocation: Allocation,
+        animation: Animation<bool>,
     ) {
         self.maps
             .entry(tile_id.zoom())
@@ -64,6 +88,7 @@ impl DrawCache {
                     handle,
                     rectangle,
                     allocation,
+                    state: State::Active(animation)
                 },
             );
     }

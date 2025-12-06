@@ -65,6 +65,32 @@ impl TileCoord {
         })
     }
 
+    pub fn children(&self) -> Option<[TileCoord; 4]> {
+        let zoom = self.zoom.checked_add(1)?;
+        Some([
+            TileCoord {
+                x: self.x * 2,
+                y: self.y * 2,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2 + 1,
+                y: self.y * 2,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2,
+                y: self.y * 2 + 1,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2 + 1,
+                y: self.y * 2 + 1,
+                zoom: zoom,
+            },
+        ])
+    }
+
     pub fn east(&self) -> Option<TileCoord> {
         (self.x < total_tiles(self.zoom) - 1).then(|| TileCoord {
             x: self.x + 1,

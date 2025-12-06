@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use iced::{Element, Point, Rectangle, Vector};
+use iced::{Animation, Element, Point, Rectangle, Vector};
 use iced_core::{
     Image, Widget,
     image::{FilterMethod, Handle},
@@ -13,7 +13,7 @@ use iced_core::{
 
 use crate::{
     Projector, Viewpoint,
-    draw_cache::{self, DrawCache},
+    draw_cache::DrawCache,
     position::{Geographic, Mercator},
     tile_cache::{CacheMessage, TileCache},
     tile_coord::TileCoord,
@@ -516,21 +516,18 @@ where
             shell.publish((self.mapper)(CacheMessage::LoadTile { id: *tile_id }))
         }
 
-        // Render all queued tiles, TODO move this to update function, cache tiles
         let mut draw_cache = DrawCache::new();
         for (tile_id, rectangle) in self.visible_tiles.iter() {
-
+            // Prioritize the previous draw cache, otherwise try to get it from the tile cache.
             let mut get_tile = |tile_id| {
                 state
-                .draw_cache
-                .remove(&tile_id)
-                .or_else(|| self.tile_cache.get_drawable(&tile_id))
+                    .draw_cache
+                    .remove(&tile_id)
+                    .or_else(|| self.tile_cache.get_drawable(&tile_id))
             };
 
-            // Prioritize the previous draw cache, otherwise try to get it from the tile cache.
-            if let Some((handle, allocation)) = get_tile(*tile_id)
-            {
-                draw_cache.insert(*tile_id, handle, *rectangle, allocation);
+            if let Some((handle, allocation)) = get_tile(*tile_id) {
+                draw_cache.insert(*tile_id, handle, *rectangle, allocation, Animation::new(true));
                 continue;
             }
 
@@ -539,16 +536,24 @@ where
                 shell.publish((self.mapper)(CacheMessage::AllocateTile { id: *tile_id }))
             }
 
+            // Find a fallback tile to render now instead.
             let mut new_tile_id = *tile_id;
-            while let Some(next_tile_id) = new_tile_id.parent() {
-                new_tile_id = next_tile_id;
-                if let Some((handle, allocation)) = get_tile(new_tile_id)
-                {
-                    // This tile is already set to be drawn
-                    if draw_cache.contains_key(&new_tile_id) {
-                        break;
-                    }
+            while let Some(parent_tile_id) = new_tile_id.parent() {
+                new_tile_id = parent_tile_id;
 
+                // This tile is already set to be drawn
+                if draw_cache.contains_key(&new_tile_id) {
+                    break;
+                }
+
+                // Ensure the tile is allocated asap
+                if self.tile_cache.should_alloc(&new_tile_id) {
+                    shell.publish((self.mapper)(CacheMessage::AllocateTile {
+                        id: new_tile_id,
+                    }))
+                }
+
+                if let Some((handle, allocation)) = get_tile(new_tile_id) {
                     // Determine the offset of this tile relative to the viewport center
                     let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
                     let tile_size = rectangle.width * zoom_scale as f32;
@@ -569,7 +574,7 @@ where
                         height: tile_size,
                     };
 
-                    draw_cache.insert(new_tile_id, handle, rectangle, allocation);
+                    draw_cache.insert(new_tile_id, handle, rectangle, allocation, Animation::new(true));
 
                     break;
                 }
