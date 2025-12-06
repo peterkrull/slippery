@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, hash_map::Entry},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use iced::{Animation, Element, Point, Rectangle, Vector};
@@ -183,10 +183,21 @@ struct WidgetState {
 }
 
 #[derive(Debug)]
-struct ZoomState {
-    prev_time: Instant,
-    point: Option<Mercator>,
-    decay: f32,
+
+enum ZoomState {
+    Continuous {
+        point: Option<Mercator>,
+        start_time: Instant,
+        start_zoom: f64,
+        velocity: f64,
+    },
+    Discrete {
+        point: Option<Mercator>,
+        start_time: Instant,
+        start_zoom: f64,
+        end_zoom: f64,
+        duration: Duration,
+    },
 }
 
 impl WidgetState {
@@ -308,28 +319,73 @@ where
 
         match event {
             iced::Event::Window(iced::window::Event::RedrawRequested(at)) => {
+
+
+
+
                 if let Some(zoom) = state.zoom.as_mut() {
-                    let delta = (*at - zoom.prev_time).as_secs_f32();
-                    let tau = 0.05;
-                    let alpha = tau / (tau + delta);
+                    match zoom {
+                        ZoomState::Continuous {
+                            point,
+                            start_time,
+                            start_zoom,
+                            velocity,
+                        } => {
+                            let elapsed = (*at - *start_time).as_secs_f64();
+                            let tau = 0.05;
 
-                    zoom.prev_time = *at;
-                    zoom.decay *= alpha;
+                            // Analytic position: x(t) = x0 + v0 * tau * (1 - e^(-t/tau))
+                            let target_zoom = *start_zoom + *velocity * tau * (1.0 - (-elapsed / tau).exp());
+                            let zoom_amt = target_zoom - self.viewpoint.zoom.f64();
 
-                    let zoom_amt = (delta * zoom.decay) as f64;
+                            if let Some(position) = point {
+                                let position = projector.mercator_into_screen_space(*position);
+                                self.viewpoint.zoom_on_point(
+                                    zoom_amt,
+                                    position,
+                                    projector.bounds,
+                                );
+                            } else {
+                                self.viewpoint.zoom_on_center(zoom_amt);
+                            }
 
-                    if zoom.decay.abs() > 0.1 {
-                        if let Some(position) = zoom.point {
-                            let position = projector.mercator_into_screen_space(position);
-                            self.viewpoint
-                                .zoom_on_point(zoom_amt, position, projector.bounds);
-                        } else {
-                            self.viewpoint.zoom_on_center(zoom_amt);
+                            // v(t) = v0 * e^(-t/tau)
+                            let current_velocity = *velocity * (-elapsed / tau).exp();
+                            if current_velocity.abs() < 0.1 {
+                                state.zoom = None;
+                            }
                         }
+                        ZoomState::Discrete {
+                            point,
+                            start_zoom,
+                            end_zoom,
+                            start_time,
+                            duration,
+                        } => {
+                            let elapsed = *at - *start_time;
+                            let t = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
 
-                        projector.viewpoint = self.viewpoint;
-                    } else {
-                        state.zoom = None;
+                            // Ease out cubic
+                            let ease = 1.0 - (1.0 - t).powi(3);
+
+                            let current = *start_zoom + (*end_zoom - *start_zoom) * ease;
+                            let zoom_amt = current - self.viewpoint.zoom.f64();
+
+                            if let Some(position) = point {
+                                let position = projector.mercator_into_screen_space(*position);
+                                self.viewpoint.zoom_on_point(
+                                    zoom_amt,
+                                    position,
+                                    projector.bounds,
+                                );
+                            } else {
+                                self.viewpoint.zoom_on_center(zoom_amt);
+                            }
+
+                            if t >= 1.0 {
+                                state.zoom = None;
+                            }
+                        }
                     }
 
                     needs_redraw = true;
