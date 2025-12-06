@@ -31,6 +31,7 @@ pub struct MapWidget<'a, Message, Theme, Renderer> {
     children: Vec<GlobalElement<'a, Message, Theme, Renderer>>,
     on_update: Option<fn(Projector) -> Message>,
     on_click: Option<fn(Geographic) -> Message>,
+    discrete_zoom_step_size: f32,
 }
 
 impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
@@ -47,6 +48,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
             on_update: None,
             on_click: None,
             mapper,
+            discrete_zoom_step_size: 1.0,
         }
     }
 
@@ -137,9 +139,6 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
             width: corrected_tile_size as f32,
             height: corrected_tile_size as f32,
         };
-
-        // TODO: Hacky fix for sub-pixel misalignment between tiles
-        let projected_position = projected_position.expand(0.001);
 
         // Accept the tile if it intersects the viewport
         if viewport.intersects(&projected_position) {
@@ -319,10 +318,6 @@ where
 
         match event {
             iced::Event::Window(iced::window::Event::RedrawRequested(at)) => {
-
-
-
-
                 if let Some(zoom) = state.zoom.as_mut() {
                     match zoom {
                         ZoomState::Continuous {
@@ -427,27 +422,69 @@ where
             }
             iced::Event::Mouse(event) => match event {
                 iced::mouse::Event::WheelScrolled { delta } if self.on_update.is_some() => {
-                    let amount = match delta {
-                        iced::mouse::ScrollDelta::Lines { y, .. } => *y as f64 * 20.0,
-                        iced::mouse::ScrollDelta::Pixels { y, .. } => *y as f64 * 1.0,
-                    };
+                    let point = cursor
+                        .position_over(projector.bounds)
+                        .map(|p| projector.mercator_from_screen_space(p));
 
-                    let mut zoom = ZoomState {
-                        prev_time: Instant::now(),
-                        point: None,
-                        decay: amount as f32,
-                    };
+                    match delta {
+                        iced::mouse::ScrollDelta::Lines { y, .. } => {
+                            let current_zoom = self.viewpoint.zoom.f64();
+                            let step = self.discrete_zoom_step_size as f64;
 
-                    if let Some(position) = cursor.position_over(projector.bounds) {
-                        zoom.point = Some(projector.mercator_from_screen_space(position));
+                            // Determine target based on current state
+                            let target =
+                                if let Some(ZoomState::Discrete { end_zoom, .. }) = &state.zoom {
+                                    // If already animating, add to the end target
+                                    *end_zoom + (*y as f64) * step
+                                } else {
+                                    // Otherwise snap to next integer
+                                    let nearest = current_zoom.round();
+                                    if (nearest - current_zoom).abs() < step / 0.1 {
+                                        nearest + (*y as f64) * step
+                                    } else {
+                                        if *y > 0.0 {
+                                            current_zoom.floor() + step
+                                        } else {
+                                            current_zoom.ceil() - step
+                                        }
+                                    }
+                                };
+
+                            state.zoom = Some(ZoomState::Discrete {
+                                point,
+                                start_zoom: current_zoom,
+                                end_zoom: target,
+                                start_time: Instant::now(),
+                                duration: Duration::from_millis(350),
+                            });
+                        }
+                        iced::mouse::ScrollDelta::Pixels { y, .. } => {
+                            let amount = *y as f64;
+                            let now = Instant::now();
+
+                            let mut velocity = amount;
+
+                            // Carry over momentum if we were in Continuous mode
+                            if let Some(ZoomState::Continuous {
+                                start_time,
+                                velocity: old_velocity,
+                                ..
+                            }) = state.zoom
+                            {
+                                let elapsed = (now - start_time).as_secs_f64();
+                                let tau = 0.05;
+                                let current_velocity = old_velocity * (-elapsed / tau).exp();
+                                velocity += current_velocity;
+                            }
+
+                            state.zoom = Some(ZoomState::Continuous {
+                                point,
+                                start_time: now,
+                                start_zoom: self.viewpoint.zoom.f64(),
+                                velocity,
+                            });
+                        }
                     }
-
-                    // Carry over any existing zoom momentum
-                    if let Some(existing_zoom) = state.zoom.take() {
-                        zoom.decay += existing_zoom.decay;
-                    }
-
-                    state.zoom = Some(zoom);
 
                     needs_redraw = true;
                 }
@@ -543,7 +580,7 @@ where
 
         // Ensure visible tiles are calculated
         if self.visible_tiles.is_empty() {
-            let flood_area = bounds.expand(128);
+            let flood_area = bounds.expand(64);
             self.visible_tiles = self.flood_tiles(&flood_area);
         }
 
@@ -688,10 +725,12 @@ where
                     continue;
                 }
 
+                let rect = data.rectangle.expand(0.01);
+
                 let image = Image::new(data.handle.clone())
                     .snap(false)
                     .filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, data.rectangle, data.rectangle)
+                renderer.draw_image(image, rect, rect)
             }
         });
 
@@ -702,10 +741,12 @@ where
                     continue;
                 }
 
+                let rect = data.rectangle.expand(0.01);
+
                 let image = Image::new(data.handle.clone())
                     .snap(true)
                     .filter_method(FilterMethod::Nearest);
-                renderer.draw_image(image, data.rectangle, data.rectangle)
+                renderer.draw_image(image, rect, rect)
             }
         });
 
