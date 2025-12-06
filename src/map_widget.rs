@@ -13,7 +13,7 @@ use iced_core::{
 
 use crate::{
     Projector, Viewpoint,
-    draw_cache::DrawCache,
+    draw_cache::{self, DrawCache},
     position::{Geographic, Mercator},
     tile_cache::{CacheMessage, TileCache},
     tile_coord::TileCoord,
@@ -24,7 +24,7 @@ pub const BASE_SIZE: u32 = 512;
 
 /// A [slippy tile](https://wiki.openstreetmap.org/wiki/Slippy_map) widget
 pub struct MapWidget<'a, Message, Theme, Renderer> {
-    map: &'a TileCache,
+    tile_cache: &'a TileCache,
     viewpoint: Viewpoint,
     visible_tiles: Vec<(TileCoord, Rectangle)>,
     mapper: fn(CacheMessage) -> Message,
@@ -40,7 +40,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         position: Viewpoint,
     ) -> Self {
         Self {
-            map,
+            tile_cache: map,
             viewpoint: position,
             visible_tiles: Vec::new(),
             children: Vec::new(),
@@ -84,9 +84,14 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         let capacity = viewport.area() / (BASE_SIZE * BASE_SIZE) as f32;
         let mut tiles = HashMap::with_capacity(capacity.ceil() as usize);
 
-        let scale_offset = (BASE_SIZE as f64 / self.map.tile_size() as f64).log2();
+        let scale_offset = (BASE_SIZE as f64 / self.tile_cache.tile_size() as f64).log2();
 
-        let scaled_zoom = self.viewpoint.zoom.f64().min(self.map.max_zoom() as f64) + scale_offset;
+        let scaled_zoom = self
+            .viewpoint
+            .zoom
+            .f64()
+            .min(self.tile_cache.max_zoom() as f64)
+            + scale_offset;
 
         // TODO This goofs up when zooming out far enough
         let corrected_tile_size =
@@ -174,6 +179,7 @@ struct WidgetState {
     movement: Movement,
     cursor: Option<Point>,
     zoom: Option<ZoomState>,
+    draw_cache: DrawCache,
 }
 
 #[derive(Debug)]
@@ -201,8 +207,7 @@ impl WidgetState {
     pub fn get_ref(state: &State) -> Option<&WidgetState> {
         match state {
             State::None => None,
-            State::Some(any) => any
-                .downcast_ref::<WidgetState>()
+            State::Some(any) => any.downcast_ref::<WidgetState>(),
         }
     }
 }
@@ -225,6 +230,7 @@ where
         renderer: &Renderer,
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
+        println!("LAYOUT");
         let state = WidgetState::get_mut(&mut tree.state);
         let size = limits.max();
 
@@ -275,6 +281,8 @@ where
         shell: &mut iced_core::Shell<'_, Message>,
         _viewport: &iced::Rectangle,
     ) {
+        println!("UPDATE: {event:?}");
+
         let state = WidgetState::get_mut(&mut tree.state);
         let bounds = layout.bounds();
         let prev_projector = state.projector.clone();
@@ -349,7 +357,7 @@ where
 
                     // Decay the velocity, less so at higher speeds
                     let norm_velocity = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
-                    let dynamic_tau = 0.2 + norm_velocity * 0.0001;
+                    let dynamic_tau = 0.2 + norm_velocity * 0.00005;
                     let alpha = dynamic_tau / (dynamic_tau + delta);
                     *velocity = *velocity * alpha;
 
@@ -492,7 +500,7 @@ where
         let mut to_fetch = self
             .visible_tiles
             .iter()
-            .filter(|(tile_id, _)| self.map.should_fetch(&tile_id))
+            .filter(|(tile_id, _)| self.tile_cache.should_load(&tile_id))
             .collect::<Vec<_>>();
 
         // Sort them in order of distance to cursor (if available) or viewport center
@@ -507,6 +515,68 @@ where
         for (tile_id, _) in to_fetch {
             shell.publish((self.mapper)(CacheMessage::LoadTile { id: *tile_id }))
         }
+
+        // Render all queued tiles, TODO move this to update function, cache tiles
+        let mut draw_cache = DrawCache::new();
+        for (tile_id, rectangle) in self.visible_tiles.iter() {
+
+            let mut get_tile = |tile_id| {
+                state
+                .draw_cache
+                .remove(&tile_id)
+                .or_else(|| self.tile_cache.get_drawable(&tile_id))
+            };
+
+            // Prioritize the previous draw cache, otherwise try to get it from the tile cache.
+            if let Some((handle, allocation)) = get_tile(*tile_id)
+            {
+                draw_cache.insert(*tile_id, handle, *rectangle, allocation);
+                continue;
+            }
+
+            // Ensure the tile is allocated asap
+            if self.tile_cache.should_alloc(&tile_id) {
+                shell.publish((self.mapper)(CacheMessage::AllocateTile { id: *tile_id }))
+            }
+
+            let mut new_tile_id = *tile_id;
+            while let Some(next_tile_id) = new_tile_id.parent() {
+                new_tile_id = next_tile_id;
+                if let Some((handle, allocation)) = get_tile(new_tile_id)
+                {
+                    // This tile is already set to be drawn
+                    if draw_cache.contains_key(&new_tile_id) {
+                        break;
+                    }
+
+                    // Determine the offset of this tile relative to the viewport center
+                    let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
+                    let tile_size = rectangle.width * zoom_scale as f32;
+
+                    let projector = Projector {
+                        viewpoint: self.viewpoint,
+                        cursor: None,
+                        bounds,
+                    };
+
+                    let tile_mercator = new_tile_id.to_mercator();
+                    let screen_pos = projector.mercator_into_screen_space(tile_mercator);
+
+                    let rectangle = Rectangle {
+                        x: screen_pos.x,
+                        y: screen_pos.y,
+                        width: tile_size,
+                        height: tile_size,
+                    };
+
+                    draw_cache.insert(new_tile_id, handle, rectangle, allocation);
+
+                    break;
+                }
+            }
+        }
+
+        core::mem::swap(&mut draw_cache, &mut state.draw_cache);
 
         if let Some(on_update) = self.on_update {
             let new_projector = Projector {
@@ -538,82 +608,43 @@ where
         cursor: iced_core::mouse::Cursor,
         _viewport: &iced::Rectangle,
     ) {
+        println!("DRAW");
+
+        let Some(draw_cache) = WidgetState::get_ref(&tree.state).map(|state| &state.draw_cache)
+        else {
+            return;
+        };
+
         let bounds = layout.bounds();
-
-        // Render all queued tiles, TODO move this to update function, cache tiles
-        let mut draw_cache = DrawCache::new();
-        for (tile_id, rectangle) in self.visible_tiles.iter() {
-            match self.map.get_drawable(&tile_id) {
-                Some(tile) => {
-                    draw_cache.insert(*tile_id, tile.clone(), *rectangle);
-                }
-                _ => {
-                    let mut new_tile_id = *tile_id;
-                    while let Some(next_tile_id) = new_tile_id.parent() {
-                        new_tile_id = next_tile_id;
-                        if let Some(tile) = self.map.get_drawable(&new_tile_id) {
-                            // This tile is already set to be drawn
-                            if draw_cache.contains_key(&new_tile_id) {
-                                break;
-                            }
-
-                            // Determine the offset of this tile relative to the viewport center
-                            let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
-                            let tile_size = rectangle.width * zoom_scale as f32;
-
-                            let projector = Projector {
-                                viewpoint: self.viewpoint,
-                                cursor: None,
-                                bounds,
-                            };
-
-                            let tile_mercator = new_tile_id.to_mercator();
-                            let screen_pos = projector.mercator_into_screen_space(tile_mercator);
-
-                            let projected_position = Rectangle {
-                                x: screen_pos.x,
-                                y: screen_pos.y,
-                                width: tile_size,
-                                height: tile_size,
-                            };
-
-                            draw_cache.insert(new_tile_id, tile.clone(), projected_position);
-
-                            break;
-                        }
-                    }
-                }
-            }
-        }
 
         // Create new layer to ensure tiles are clipped,
         // and draw tiles in order of zoom level (lowest first)
         renderer.with_layer(bounds, |renderer| {
-            for (handle, bounds) in draw_cache.iter_tiles() {
+            for data in draw_cache.iter_tiles() {
                 // Draw tiles that are true-sized in a separate pass later.
                 // Seemingly Iced (or WGPU) does not respect draw order when mixing filter methods
-                if (bounds.width - self.map.tile_size() as f32).abs() < 0.02 {
+                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() < 0.1 {
                     continue;
                 }
 
-                let image = Image::new(handle)
+                let image = Image::new(data.handle.clone())
                     .snap(false)
                     .filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, bounds, bounds)
+                renderer.draw_image(image, data.rectangle, data.rectangle)
             }
         });
 
         renderer.with_layer(bounds, |renderer| {
-            for (handle, bounds) in draw_cache.iter_tiles() {
+            for data in draw_cache.iter_tiles() {
                 // These images were drawn in the previous pass
-                if (bounds.width - self.map.tile_size() as f32).abs() >= 0.02 {
+                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() >= 0.1 {
                     continue;
                 }
 
-                let image = Image::new(handle)
+                let image = Image::new(data.handle.clone())
                     .snap(true)
                     .filter_method(FilterMethod::Nearest);
-                renderer.draw_image(image, bounds, bounds)
+                renderer.draw_image(image, data.rectangle, data.rectangle)
             }
         });
 

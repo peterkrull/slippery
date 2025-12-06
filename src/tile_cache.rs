@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}, time::{Duration, Instant}};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use iced::Task;
 use iced_core::image::{Allocation, Handle};
@@ -31,16 +31,22 @@ pub enum CacheMessage {
         id: TileCoord,
         handle: Handle,
     },
-    TileAllocated {
-        id: TileCoord,
-        allocation: Allocation,
-    },
     TileLoadFailed {
         id: TileCoord,
+    },
+    AllocateTile {
+        id: TileCoord,
+    },
+    TileAllocated {
+        id: TileCoord,
+        alloc: Allocation,
     },
     TileAllocFailed {
         id: TileCoord,
         err: iced::widget::image::Error,
+    },
+    DeallocateTile {
+        id: TileCoord,
     },
 }
 
@@ -48,7 +54,9 @@ pub enum CacheMessage {
 pub enum TileEntry {
     Loading,
     Loaded(Handle),
-    Drawable(Handle, Allocation),
+    Allocating(Handle),
+    #[allow(unused)]
+    Allocated(Handle, Allocation),
 }
 
 #[derive(Debug)]
@@ -90,48 +98,25 @@ impl TileCache {
         self.fetcher.source.max_zoom()
     }
 
-    pub fn should_fetch(&self, tile_id: &TileCoord) -> bool {
+    pub fn should_load(&self, tile_id: &TileCoord) -> bool {
         self.cache.get(tile_id).is_none()
     }
 
-    pub fn get_drawable(&self, tile_id: &TileCoord) -> Option<&Handle> {
+    pub fn should_alloc(&self, tile_id: &TileCoord) -> bool {
+        matches!(self.cache.get(tile_id), Some(TileEntry::Loaded(_)))
+    }
+
+    pub fn get_drawable(&self, tile_id: &TileCoord) -> Option<(Handle, Allocation)> {
         match self.cache.get(tile_id) {
-            Some(TileEntry::Drawable(handle, _)) => {
-                Some(handle)},
+            Some(TileEntry::Allocated(handle, allocation)) => {
+                Some((handle.clone(), allocation.clone()))
+            }
             _ => None,
         }
     }
 
     pub fn update(&mut self, update: CacheMessage) -> Task<CacheMessage> {
         match update {
-            CacheMessage::TileLoaded { id, handle } => {
-                self.cache.insert(id, TileEntry::Loaded(handle.clone()));
-
-                return iced::widget::image::allocate(handle).map(move |result| match result {
-                    Ok(allocation) => CacheMessage::TileAllocated { id, allocation },
-                    Err(err) => CacheMessage::TileAllocFailed { id, err },
-                });
-            }
-            CacheMessage::TileLoadFailed { id } => {
-                // Remove entry of failed tile load
-                if self
-                    .cache
-                    .get(&id)
-                    .is_some_and(|e| matches!(e, TileEntry::Loading))
-                {
-                    self.cache.remove(&id);
-                }
-            }
-            CacheMessage::TileAllocated { id, allocation } => {
-                if let Some(entry) = self.cache.get_mut(&id) {
-                    if let TileEntry::Loaded(handle) = entry {
-                        *entry = TileEntry::Drawable(handle.clone(), allocation);
-                    }
-                }
-            }
-            CacheMessage::TileAllocFailed { id, err } => {
-                log::error!("Unable to allocate tile {id:?} with renderer: {err:?}");
-            }
             CacheMessage::LoadTile { id } => {
                 if !id.valid() || self.cache.contains_key(&id) {
                     return Task::none();
@@ -144,10 +129,68 @@ impl TileCache {
                 return Task::future(async move {
                     match handle.fetch_tile(id).await {
                         Ok(tile) => CacheMessage::TileLoaded { id, handle: tile },
-                        // TODO, handle this error better?
                         Err(_) => CacheMessage::TileLoadFailed { id },
                     }
                 });
+            }
+            CacheMessage::TileLoaded { id, handle } => {
+                self.cache.insert(id, TileEntry::Loaded(handle.clone()));
+
+                // Immediately allocate tile with the renderer
+                return Task::done(CacheMessage::AllocateTile { id });
+            }
+            CacheMessage::TileLoadFailed { id } => {
+                if let Some(TileEntry::Loading) = self.cache.get(&id) {
+                    self.cache.remove(&id);
+                }
+            }
+            CacheMessage::AllocateTile { id } => {
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    if let TileEntry::Loaded(handle) = entry {
+                        let alloc_task =
+                            iced::widget::image::allocate(handle.clone()).map(move |result| {
+                                match result {
+                                    Ok(alloc) => CacheMessage::TileAllocated { id, alloc },
+                                    Err(err) => CacheMessage::TileAllocFailed { id, err },
+                                }
+                            });
+
+                        *entry = TileEntry::Allocating(handle.clone());
+
+                        return alloc_task;
+                    }
+                }
+            }
+            CacheMessage::TileAllocated {
+                id,
+                alloc: allocation,
+            } => {
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    if let TileEntry::Allocating(handle) | TileEntry::Loaded(handle) = entry {
+                        *entry = TileEntry::Allocated(handle.clone(), allocation);
+
+                        // The allocation is Arc, so widgets will hold on if they need it longer
+                        return Task::future(async move {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            CacheMessage::DeallocateTile { id }
+                        });
+                    }
+                }
+            }
+            CacheMessage::TileAllocFailed { id, err } => {
+                log::error!("Unable to allocate tile {id:?} with renderer: {err:?}");
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    if let TileEntry::Allocating(handle) = entry {
+                        *entry = TileEntry::Loaded(handle.clone());
+                    }
+                }
+            }
+            CacheMessage::DeallocateTile { id } => {
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    if let TileEntry::Allocated(handle, _) = entry {
+                        *entry = TileEntry::Loaded(handle.clone());
+                    }
+                }
             }
         }
 
@@ -165,15 +208,17 @@ struct HttpFetcher {
 
 impl HttpFetcher {
     async fn fetch_tile(&self, tile_id: TileCoord) -> Result<Handle, FetcherError> {
-        // Semaphore ensures we are not making too many requests
-        // Assume that if we have been locked for more than a second,
-        // that the camera may have moved and the tile in no longer needed.
+        // Semaphore ensures we are not making too many requests.
+        // Assume that if we have been waiting for a while, that the
+        // viewpoint may have moved and the tile in no longer needed.
         // If it was needed, another fetch request will just be made.
-        let _permit =
-            tokio::time::timeout(std::time::Duration::from_secs(1), self.semaphore.acquire())
-                .await
-                .map_err(|_| FetcherError::SemaphoreTimeout)?
-                .map_err(|_| FetcherError::SemaphoreClosed)?;
+        let _permit = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            self.semaphore.acquire(),
+        )
+        .await
+        .map_err(|_| FetcherError::SemaphoreTimeout)?
+        .map_err(|_| FetcherError::SemaphoreClosed)?;
 
         // Construct the http request
         let source = self.source.tile_url(tile_id);

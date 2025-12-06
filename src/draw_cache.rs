@@ -1,12 +1,18 @@
 use std::collections::HashMap;
 
 use iced::Rectangle;
-use iced_core::image::Handle;
+use iced_core::image::{Allocation, Handle};
 
 use crate::tile_coord::TileCoord;
 
 pub(crate) struct DrawCache {
-    pub(crate) maps: HashMap<u8, HashMap<(u32, u32), (Handle, Rectangle)>>,
+    pub(crate) maps: HashMap<u8, HashMap<(u32, u32), DrawData>>,
+}
+
+pub struct DrawData {
+    pub handle: Handle,
+    pub rectangle: Rectangle,
+    pub allocation: Allocation,
 }
 
 impl Default for DrawCache {
@@ -22,6 +28,18 @@ impl DrawCache {
         }
     }
 
+    /// Remove a tiles handle and allocation for reuse
+    pub fn remove(&mut self, tile_id: &TileCoord) -> Option<(Handle, Allocation)> {
+        self.maps
+            .get_mut(&tile_id.zoom())
+            .map(|inner| {
+                inner
+                    .remove(&tile_id.x_y())
+                    .map(|data| (data.handle, data.allocation))
+            })
+            .flatten()
+    }
+
     /// Check whether the cache contains some tile
     pub fn contains_key(&mut self, tile_id: &TileCoord) -> bool {
         self.maps
@@ -33,23 +51,31 @@ impl DrawCache {
     pub fn insert(
         &mut self,
         tile_id: TileCoord,
-        value: Handle,
+        handle: Handle,
         rectangle: Rectangle,
-    ) -> Option<(Handle, Rectangle)> {
+        allocation: Allocation,
+    ) {
         self.maps
             .entry(tile_id.zoom())
             .or_insert_with(|| HashMap::with_capacity(25))
-            .insert(tile_id.x_y(), (value, rectangle))
+            .insert(
+                tile_id.x_y(),
+                DrawData {
+                    handle,
+                    rectangle,
+                    allocation,
+                },
+            );
     }
 
     /// Iterate through all tiles in ascending zoom order
-    pub fn iter_tiles(&self) -> impl Iterator<Item = (&Handle, Rectangle)> {
+    pub fn iter_tiles(&self) -> impl Iterator<Item = &DrawData> {
         let mut zooms: Vec<&u8> = self.maps.keys().collect();
         zooms.sort();
 
         zooms.into_iter().flat_map(|zoom| {
             let map = &self.maps[zoom];
-            map.iter().map(move |(_, (h, r))| (h, *r))
+            map.iter().map(move |(_, data)| data)
         })
     }
 }

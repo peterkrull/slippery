@@ -1,5 +1,7 @@
 use iced::{
-    self, Element, Task, Theme, alignment::Vertical, widget::{Button, Text, column, container, row, text}
+    self, Element, Task, Theme,
+    alignment::Vertical,
+    widget::{Button, Text, column, container, row, text},
 };
 use slippery::{
     CacheMessage, Geographic, GlobalElement, MapWidget, Projector, TileCache, TileCoord, Viewpoint,
