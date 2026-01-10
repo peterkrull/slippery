@@ -29,15 +29,6 @@ impl DrawCache {
         }
     }
 
-    /// Clean up any tile which is no longer viewable at all.
-    pub fn retain_intersections(&mut self, bounds: &Rectangle) {
-        for (_, tiles) in self.maps.iter_mut() {
-            tiles.retain(|_, draw_data| draw_data.rectangle.intersects(&bounds));
-        }
-
-        self.maps.retain(|_, map| !map.is_empty());
-    }
-
     /// Remove a tiles handle and allocation for reuse
     pub fn remove(&mut self, tile_id: &TileCoord) -> Option<(Handle, Allocation)> {
         self.maps
@@ -51,39 +42,10 @@ impl DrawCache {
     }
 
     /// Check whether the cache contains some tile
-    pub fn get_mut(&mut self, tile_id: &TileCoord) -> Option<&mut DrawData> {
-        self.maps
-            .get_mut(&tile_id.zoom())
-            .map(|inner| inner.get_mut(&tile_id.x_y()))
-            .flatten()
-    }
-    
-    /// Check whether the cache contains some tile
-    pub fn get_ref(&self, tile_id: &TileCoord) -> Option<&DrawData> {
-        self.maps
-            .get(&tile_id.zoom())
-            .map(|inner| inner.get(&tile_id.x_y()))
-            .flatten()
-    }
-
-    /// Check whether the cache contains some tile
     pub fn contains_key(&self, tile_id: &TileCoord) -> bool {
         self.maps
             .get(&tile_id.zoom())
             .is_some_and(|inner| inner.contains_key(&tile_id.x_y()))
-    }
-
-    /// Get the immediate children (1 level deeper) of a tile that exist in the cache.
-    /// Returns up to 4 child tile IDs.
-    pub fn get_cached_children(&self, tile_id: &TileCoord) -> Vec<TileCoord> {
-        let Some(children) = tile_id.children() else {
-            return Vec::new();
-        };
-
-        children
-            .into_iter()
-            .filter(|child| self.contains_key(child))
-            .collect()
     }
 
     /// Insert a tile using its Id, image handle and its screen-space rectangle

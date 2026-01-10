@@ -234,7 +234,6 @@ where
         renderer: &Renderer,
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
-        println!("LAYOUT");
         let state = WidgetState::get_mut(&mut tree.state);
         let size = limits.max();
 
@@ -285,8 +284,6 @@ where
         shell: &mut iced_core::Shell<'_, Message>,
         _viewport: &iced::Rectangle,
     ) {
-        println!("UPDATE: {event:?}");
-
         let state = WidgetState::get_mut(&mut tree.state);
         let bounds = layout.bounds();
         let prev_projector = state.projector.clone();
@@ -444,7 +441,7 @@ where
                                 start_zoom: current_zoom,
                                 end_zoom: target,
                                 start_time: Instant::now(),
-                                duration: Duration::from_millis(350),
+                                duration: Duration::from_millis(250),
                             });
                         }
                         iced::mouse::ScrollDelta::Pixels { y, .. } => {
@@ -589,7 +586,7 @@ where
 
         // Ensure visible tiles are calculated
         if self.visible_tiles.is_empty() {
-            let flood_area = bounds.expand(64);
+            let flood_area = bounds.expand(32);
             self.visible_tiles = self.flood_tiles(&flood_area, projector);
         }
 
@@ -620,14 +617,15 @@ where
 
         let mut draw_cache = DrawCache::new();
         for (tile_id, rectangle) in self.visible_tiles.iter().cloned() {
-            // Helper: try to get tile from previous draw cache, then tile cache
-            let get_tile = |draw_cache: &mut DrawCache, tile_id: TileCoord| {
+            // Helper: try to get tile from previous draw cache, otherwise check tile cache
+            let get_tile = |draw_cache: &mut DrawCache, tile_id: &TileCoord| {
                 draw_cache
-                    .remove(&tile_id)
-                    .or_else(|| self.tile_cache.get_drawable(&tile_id))
+                    .remove(tile_id)
+                    .or_else(|| self.tile_cache.get_drawable(tile_id))
             };
 
-            if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, tile_id) {
+            // Is the desired tile available, then use it.
+            if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, &tile_id) {
                 draw_cache.insert(
                     tile_id,
                     handle,
@@ -637,12 +635,44 @@ where
                 continue;
             }
 
-            // Ensure the tile is allocated asap
+            // Otherwise, ensure the tile is allocated asap!
             if self.tile_cache.should_alloc(&tile_id) {
                 shell.publish((self.mapper)(CacheMessage::AllocateTile { id: tile_id }))
             }
 
-            // Find a fallback tile to render now instead.
+            // Try to use all 4 immediate children as a fallback
+            if let Some(children) = tile_id.children() {
+                let mut num_children_available = 0;
+
+                for child_tile_id in &children {
+
+                    // This tile is already set to be drawn
+                    if draw_cache.contains_key(child_tile_id) {
+                        num_children_available += 1;
+                        continue
+                    }
+
+                    if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, child_tile_id) {
+                        let child_rectangle = self.position_of_tile(&projector, &child_tile_id);
+                        draw_cache.insert(
+                            child_tile_id.clone(),
+                            handle,
+                            child_rectangle,
+                            allocation,
+                        );
+
+                        num_children_available += 1;
+                        continue
+                    }
+                }
+
+                // If we found all children, skip parent fallback
+                if num_children_available == 4 {
+                    continue;
+                }
+            }
+
+            // If there is not full child coverage, fall back to a parent tile
             let mut new_tile_id = tile_id;
             while let Some(parent_tile_id) = new_tile_id.parent() {
                 new_tile_id = parent_tile_id;
@@ -652,7 +682,7 @@ where
                     break;
                 }
 
-                if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, new_tile_id) {
+                if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, &new_tile_id) {
                     let rectangle = self.position_of_tile(&projector, &new_tile_id);
                     draw_cache.insert(
                         new_tile_id,
@@ -663,7 +693,9 @@ where
                     break;
                 }
 
-                // Ensure the tile is allocated asap
+                // Ensure the tile is allocated asap. Even though we are also allocating
+                // the intended tile, this should ensure the parent is ready as a backup
+                // for other potentially missing tiles as well.
                 if self.tile_cache.should_alloc(&new_tile_id) {
                     shell.publish((self.mapper)(CacheMessage::AllocateTile {
                         id: new_tile_id,
@@ -673,10 +705,6 @@ where
         }
 
         core::mem::swap(&mut draw_cache, &mut state.draw_cache);
-
-        let tile_count = state.draw_cache.iter_tiles().count();
-        println!("Number of tiles to draw: {}", tile_count)
-
     }
 
     fn draw(
@@ -689,8 +717,6 @@ where
         cursor: iced_core::mouse::Cursor,
         _viewport: &iced::Rectangle,
     ) {
-        println!("DRAW");
-
         let Some(state) = WidgetState::get_ref(&tree.state) else {
             return;
         };

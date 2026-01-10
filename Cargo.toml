@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "3e21dfba7eb670fab944e238dccff2facf9861ef", default-features = false, features = ["image", "tokio", "wgpu", "wayland", "x11"] }
-iced_core = { git = "https://github.com/iced-rs/iced", rev = "3e21dfba7eb670fab944e238dccff2facf9861ef", features = ["advanced"] }
+iced = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa5e2d58fe82ab642fb", default-features = false, features = ["image", "tokio", "wgpu", "wayland", "x11"] }
+iced_core = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa5e2d58fe82ab642fb", features = ["advanced"] }
 
 # For fetching tiles
 reqwest = "0.12.24"
