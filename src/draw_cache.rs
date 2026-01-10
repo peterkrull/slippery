@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::{Rectangle};
+use iced::Rectangle;
 use iced_core::image::{Allocation, Handle};
 
 use crate::tile_coord::TileCoord;
@@ -14,7 +14,6 @@ pub struct DrawData {
     pub rectangle: Rectangle,
     pub allocation: Allocation,
 }
-
 
 impl Default for DrawCache {
     fn default() -> Self {

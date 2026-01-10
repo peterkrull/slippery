@@ -5,7 +5,7 @@ pub enum Scale {
     X1 = 1,
     X2 = 2,
     X4 = 4,
-    X8 = 8
+    X8 = 8,
 }
 
 /// <https://www.openstreetmap.org/about>
@@ -68,7 +68,6 @@ impl super::Source for CartoDark {
     }
 }
 
-
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]
 pub struct CartoVoyager(pub Scale);
@@ -98,7 +97,6 @@ impl super::Source for CartoVoyager {
         512
     }
 }
-
 
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]

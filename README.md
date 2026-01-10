@@ -1,12 +1,17 @@
 # Slippery
 A slippy map widget for the Iced toolkit.
 
-![example screenshot](assets/readme-example.png)
+## Features
+- Automatically fetch visible tiles from a web source
+- Smooth zooming and panning with momentum
+- Attach widgets to specific a geographical coordinates
 
 ## Example
 
-Try running the example. Click on the map to add a marker, and use the list to remove it.
+Try running an example!
 
 ```bash
-cargo run --release --example main
+cargo run --release --example minimal
 ```
+
+![example screenshot](assets/readme-screenshot.png)
