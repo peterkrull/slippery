@@ -8,8 +8,8 @@ iced = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa
 iced_core = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa5e2d58fe82ab642fb", features = ["advanced"] }
 
 # For fetching tiles
-reqwest = "0.12.24"
-reqwest-middleware = "0.4.2"
+reqwest = "0.13.1"
+reqwest-middleware = "0.5.0"
 http-cache-reqwest = "0.16.0"
 
 # Reqwest requires tokio anyway
