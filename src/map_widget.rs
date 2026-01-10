@@ -723,37 +723,14 @@ where
 
         let bounds = layout.bounds();
 
-        // Create new layer to ensure tiles are clipped,
         // and draw tiles in order of zoom level (lowest first)
         renderer.with_layer(bounds, |renderer| {
             for data in state.draw_cache.iter_tiles() {
-                // Draw tiles that are true-sized in a separate pass later.
-                // Seemingly Iced (or WGPU) does not respect draw order when mixing filter methods
-                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() < 0.01 {
-                    continue;
-                }
-
-                let rect = data.rectangle.expand(0.002);
-
-                let image = Image::new(&data.handle)
-                    .snap(false)
-                    .filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, rect, rect)
-            }
-        });
-
-        renderer.with_layer(bounds, |renderer| {
-            for data in state.draw_cache.iter_tiles() {
-                // These images were drawn in the previous pass
-                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() >= 0.01 {
-                    continue;
-                }
-
                 let rect = data.rectangle.expand(0.002);
 
                 let image = Image::new(&data.handle)
                     .snap(true)
-                    .filter_method(FilterMethod::Nearest);
+                    .filter_method(FilterMethod::Linear);
                 renderer.draw_image(image, rect, rect)
             }
         });
