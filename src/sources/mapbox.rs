@@ -1,4 +1,4 @@
-use crate::tile::TileId;
+use crate::tile_coord::TileCoord;
 
 use super::{Attribution, Source};
 
@@ -45,7 +45,7 @@ pub struct Mapbox {
 }
 
 impl Source for Mapbox {
-    fn tile_url(&self, tile_id: TileId) -> String {
+    fn tile_url(&self, tile_id: TileCoord) -> String {
         format!(
             "https://api.mapbox.com/styles/v1/mapbox/{}/tiles/512/{}/{}/{}{}?access_token={}",
             self.style.api_slug(),

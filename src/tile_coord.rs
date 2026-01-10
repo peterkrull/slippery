@@ -1,0 +1,133 @@
+use crate::position::{Mercator, total_tiles};
+
+/// Identifies the tile in the tile grid.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct TileCoord {
+    /// X number of the tile.
+    x: u32,
+
+    /// Y number of the tile.
+    y: u32,
+
+    /// Zoom level, where 0 means no zoom.
+    /// See: <https://wiki.openstreetmap.org/wiki/Zoom_levels>
+    zoom: u8,
+}
+
+impl TileCoord {
+    /// The lowest-quality zoom level
+    pub const ZERO: Self = TileCoord {
+        x: 0,
+        y: 0,
+        zoom: 0,
+    };
+
+    pub fn new(x: u32, y: u32, zoom: u8) -> Self {
+        let num_tiles = 2u32.pow(zoom as u32);
+        TileCoord {
+            x: x.min(num_tiles - 1),
+            y: y.min(num_tiles - 1),
+            zoom,
+        }
+    }
+
+    pub fn x(&self) -> u32 {
+        self.x
+    }
+
+    pub fn y(&self) -> u32 {
+        self.y
+    }
+
+    pub fn x_y(&self) -> (u32, u32) {
+        (self.x, self.y)
+    }
+
+    pub fn zoom(&self) -> u8 {
+        self.zoom
+    }
+
+    pub fn to_mercator(&self) -> Mercator {
+        let total_tiles = 2u32.pow(self.zoom as u32) as f64;
+        Mercator::new(
+            (self.x as f64 / total_tiles) * 2.0 - 1.0,
+            (self.y as f64 / total_tiles) * 2.0 - 1.0,
+        )
+    }
+
+    // Obtain a lower-zoom level TileID that covers this tile.
+    // Useful for filling in not-yet loaded tiles.
+    pub fn parent(&self) -> Option<TileCoord> {
+        Some(TileCoord {
+            x: self.x / 2,
+            y: self.y / 2,
+            zoom: self.zoom.checked_sub(1)?,
+        })
+    }
+
+    pub fn children(&self) -> Option<[TileCoord; 4]> {
+        let zoom = self.zoom.checked_add(1)?;
+        Some([
+            TileCoord {
+                x: self.x * 2,
+                y: self.y * 2,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2 + 1,
+                y: self.y * 2,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2,
+                y: self.y * 2 + 1,
+                zoom: zoom,
+            },
+            TileCoord {
+                x: self.x * 2 + 1,
+                y: self.y * 2 + 1,
+                zoom: zoom,
+            },
+        ])
+    }
+
+    pub fn east(&self) -> Option<TileCoord> {
+        (self.x < total_tiles(self.zoom) - 1).then(|| TileCoord {
+            x: self.x + 1,
+            y: self.y,
+            zoom: self.zoom,
+        })
+    }
+
+    pub fn west(&self) -> Option<TileCoord> {
+        Some(TileCoord {
+            x: self.x.checked_sub(1)?,
+            y: self.y,
+            zoom: self.zoom,
+        })
+    }
+
+    pub fn north(&self) -> Option<TileCoord> {
+        Some(TileCoord {
+            x: self.x,
+            y: self.y.checked_sub(1)?,
+            zoom: self.zoom,
+        })
+    }
+
+    pub fn south(&self) -> Option<TileCoord> {
+        (self.y < total_tiles(self.zoom) - 1).then(|| TileCoord {
+            x: self.x,
+            y: self.y + 1,
+            zoom: self.zoom,
+        })
+    }
+
+    pub fn neighbors(&self) -> [Option<TileCoord>; 4] {
+        [self.north(), self.east(), self.south(), self.west()]
+    }
+
+    pub fn valid(&self) -> bool {
+        self.x < total_tiles(self.zoom) && self.y < total_tiles(self.zoom)
+    }
+}

@@ -4,20 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", features = ["image", "tokio"] }
-iced_core = { git = "https://github.com/iced-rs/iced", features = ["advanced"] }
+iced = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa5e2d58fe82ab642fb", default-features = false, features = ["image", "tokio", "wgpu", "wayland", "x11"] }
+iced_core = { git = "https://github.com/iced-rs/iced", rev = "fd25ff1d3607872cb3163fa5e2d58fe82ab642fb", features = ["advanced"] }
 
 # For fetching tiles
-reqwest = "0.12.20"
-reqwest-middleware = "0.4.2"
-http-cache-reqwest = "0.15.1"
+reqwest = "0.13.1"
+reqwest-middleware = "0.5.0"
+http-cache-reqwest = "0.16.0"
 
 # Reqwest requires tokio anyway
-tokio = { version = "1.45.1", features = ["time"] }
+tokio = { version = "1.48.0", features = ["time"] }
 
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 
-log = "0.4.27"
+log = "0.4.28"
 env_logger = "0.11.8"
 
 [dev-dependencies]

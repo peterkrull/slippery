@@ -1,17 +1,16 @@
-use super::{Attribution, Source};
-use crate::tile_coord::TileCoord;
+use crate::{TileCoord, sources::Attribution};
 
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]
-pub struct OpenStreetMap;
+pub struct ArcGisWorldMap;
 
-impl Source for OpenStreetMap {
+impl super::Source for ArcGisWorldMap {
     fn tile_url(&self, tile_id: TileCoord) -> String {
         format!(
-            "https://tile.openstreetmap.org/{}/{}/{}.png",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{}/{}/{}",
             tile_id.zoom(),
+            tile_id.y(),
             tile_id.x(),
-            tile_id.y()
         )
     }
 
@@ -22,5 +21,10 @@ impl Source for OpenStreetMap {
             logo_light: None,
             logo_dark: None,
         }
+    }
+
+    /// Size of each tile, should be a multiple of 256.
+    fn tile_size(&self) -> u32 {
+        256
     }
 }
