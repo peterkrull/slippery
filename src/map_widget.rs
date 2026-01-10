@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iced::{Animation, Element, Point, Rectangle, Vector};
+use iced::{Element, Point, Rectangle, Vector};
 use iced_core::{
     Image, Widget,
     image::{FilterMethod, Handle},
@@ -79,30 +79,40 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
         }
     }
 
+    pub fn position_of_tile(&self, projector: &Projector, tile_id: &TileCoord) -> Rectangle {
+        let tile_size = self.tile_cache.tile_size() as f64;
+        let scale_offset = (BASE_SIZE as f64 / tile_size).log2();
+
+        let scale = 2.0_f64.powf(self.viewpoint.zoom.f64() - tile_id.zoom() as f64);
+        let size = (tile_size * 2.0_f64.powf(scale_offset) * scale) as f32;
+
+        let tile_mercator = tile_id.to_mercator();
+        let screen_pos = projector.mercator_into_screen_space(tile_mercator);
+
+        Rectangle {
+            x: screen_pos.x,
+            y: screen_pos.y,
+            width: size,
+            height: size,
+        }
+    }
+
     /// Use [flood fill algorithm](https://en.wikipedia.org/wiki/Flood_fill) to determine
     /// which tiles need to be drawn..
-    pub fn flood_tiles(&self, viewport: &Rectangle) -> Vec<(TileCoord, Rectangle)> {
+    pub fn flood_tiles(&self, viewport: &Rectangle, projector: &Projector) -> Vec<(TileCoord, Rectangle)> {
         // Allocate for the number of tiles to fill the screen, and then some
         let capacity = viewport.area() / (BASE_SIZE * BASE_SIZE) as f32;
         let mut tiles = HashMap::with_capacity(capacity.ceil() as usize);
 
         let scale_offset = (BASE_SIZE as f64 / self.tile_cache.tile_size() as f64).log2();
 
-        let scaled_zoom = self
-            .viewpoint
-            .zoom
-            .f64()
-            .min(self.tile_cache.max_zoom() as f64)
-            + scale_offset;
-
-        // TODO This goofs up when zooming out far enough
-        let corrected_tile_size =
-            BASE_SIZE as f64 * 2f64.powf(self.viewpoint.zoom.f64() - scaled_zoom.round());
+        let scaled_zoom = (self.viewpoint.zoom.f64() + scale_offset)
+            .min(self.tile_cache.max_zoom() as f64);
 
         let central_tile_id = self.viewpoint.position.tile_id(scaled_zoom.round() as u8);
 
         // Recursively fill up the `tiles` map
-        self.flood_tiles_inner(viewport, central_tile_id, corrected_tile_size, &mut tiles);
+        self.flood_tiles_inner(projector, viewport, central_tile_id, &mut tiles);
 
         // Convert the map into a vec of id-uv pairs
         tiles
@@ -113,9 +123,9 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
 
     fn flood_tiles_inner(
         &self,
+        projector: &Projector,
         viewport: &Rectangle,
         tile_id: TileCoord,
-        corrected_tile_size: f64,
         tiles: &mut HashMap<TileCoord, Option<Rectangle>>,
     ) {
         // Return early if this entry has already been checked
@@ -123,34 +133,18 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
             return;
         };
 
-        // Determine the offset of this tile relative to the viewport center
-        let projector = Projector {
-            viewpoint: self.viewpoint,
-            cursor: None,
-            bounds: *viewport,
-        };
-
-        let tile_mercator = tile_id.to_mercator();
-        let screen_pos = projector.mercator_into_screen_space(tile_mercator);
-
-        let projected_position = Rectangle {
-            x: screen_pos.x,
-            y: screen_pos.y,
-            width: corrected_tile_size as f32,
-            height: corrected_tile_size as f32,
-        };
+        let rectangle = self.position_of_tile(&projector, &tile_id);
 
         // Accept the tile if it intersects the viewport
-        if viewport.intersects(&projected_position) {
-            entry.insert(Some(projected_position));
+        if viewport.intersects(&rectangle) {
+            entry.insert(Some(rectangle));
+
+            // Recurse using all valid neighbors
+            for &neigbor_tile_id in tile_id.neighbors().iter().flatten() {
+                self.flood_tiles_inner(projector, viewport, neigbor_tile_id, tiles);
+            }
         } else {
             entry.insert(None);
-            return;
-        }
-
-        // Recurse using all valid neighbors
-        for &neigbor_tile_id in tile_id.neighbors().iter().flatten() {
-            self.flood_tiles_inner(viewport, neigbor_tile_id, corrected_tile_size, tiles);
         }
     }
 }
@@ -330,16 +324,14 @@ where
                             let tau = 0.05;
 
                             // Analytic position: x(t) = x0 + v0 * tau * (1 - e^(-t/tau))
-                            let target_zoom = *start_zoom + *velocity * tau * (1.0 - (-elapsed / tau).exp());
+                            let target_zoom =
+                                *start_zoom + *velocity * tau * (1.0 - (-elapsed / tau).exp());
                             let zoom_amt = target_zoom - self.viewpoint.zoom.f64();
 
                             if let Some(position) = point {
                                 let position = projector.mercator_into_screen_space(*position);
-                                self.viewpoint.zoom_on_point(
-                                    zoom_amt,
-                                    position,
-                                    projector.bounds,
-                                );
+                                self.viewpoint
+                                    .zoom_on_point(zoom_amt, position, projector.bounds);
                             } else {
                                 self.viewpoint.zoom_on_center(zoom_amt);
                             }
@@ -368,11 +360,8 @@ where
 
                             if let Some(position) = point {
                                 let position = projector.mercator_into_screen_space(*position);
-                                self.viewpoint.zoom_on_point(
-                                    zoom_amt,
-                                    position,
-                                    projector.bounds,
-                                );
+                                self.viewpoint
+                                    .zoom_on_point(zoom_amt, position, projector.bounds);
                             } else {
                                 self.viewpoint.zoom_on_center(zoom_amt);
                             }
@@ -578,10 +567,30 @@ where
             _ => (),
         }
 
+
+        if let Some(on_update) = self.on_update {
+            let new_projector = Projector {
+                viewpoint: self.viewpoint,
+                cursor: state.cursor,
+                bounds,
+            };
+
+            let should_publish = match &prev_projector {
+                Some(prev) => *prev != new_projector,
+                None => true,
+            };
+
+            if should_publish {
+                shell.publish(on_update(new_projector.clone()));
+            }
+
+            *projector = new_projector;
+        }
+
         // Ensure visible tiles are calculated
         if self.visible_tiles.is_empty() {
             let flood_area = bounds.expand(64);
-            self.visible_tiles = self.flood_tiles(&flood_area);
+            self.visible_tiles = self.flood_tiles(&flood_area, projector);
         }
 
         if needs_redraw {
@@ -610,32 +619,47 @@ where
         }
 
         let mut draw_cache = DrawCache::new();
-        for (tile_id, rectangle) in self.visible_tiles.iter() {
-            // Prioritize the previous draw cache, otherwise try to get it from the tile cache.
-            let mut get_tile = |tile_id| {
-                state
-                    .draw_cache
+        for (tile_id, rectangle) in self.visible_tiles.iter().cloned() {
+            // Helper: try to get tile from previous draw cache, then tile cache
+            let get_tile = |draw_cache: &mut DrawCache, tile_id: TileCoord| {
+                draw_cache
                     .remove(&tile_id)
                     .or_else(|| self.tile_cache.get_drawable(&tile_id))
             };
 
-            if let Some((handle, allocation)) = get_tile(*tile_id) {
-                draw_cache.insert(*tile_id, handle, *rectangle, allocation, Animation::new(true));
+            if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, tile_id) {
+                draw_cache.insert(
+                    tile_id,
+                    handle,
+                    rectangle,
+                    allocation,
+                );
                 continue;
             }
 
             // Ensure the tile is allocated asap
             if self.tile_cache.should_alloc(&tile_id) {
-                shell.publish((self.mapper)(CacheMessage::AllocateTile { id: *tile_id }))
+                shell.publish((self.mapper)(CacheMessage::AllocateTile { id: tile_id }))
             }
 
             // Find a fallback tile to render now instead.
-            let mut new_tile_id = *tile_id;
+            let mut new_tile_id = tile_id;
             while let Some(parent_tile_id) = new_tile_id.parent() {
                 new_tile_id = parent_tile_id;
 
                 // This tile is already set to be drawn
                 if draw_cache.contains_key(&new_tile_id) {
+                    break;
+                }
+
+                if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, new_tile_id) {
+                    let rectangle = self.position_of_tile(&projector, &new_tile_id);
+                    draw_cache.insert(
+                        new_tile_id,
+                        handle,
+                        rectangle,
+                        allocation,
+                    );
                     break;
                 }
 
@@ -645,55 +669,14 @@ where
                         id: new_tile_id,
                     }))
                 }
-
-                if let Some((handle, allocation)) = get_tile(new_tile_id) {
-                    // Determine the offset of this tile relative to the viewport center
-                    let zoom_scale = 2u32.pow((tile_id.zoom() - new_tile_id.zoom()) as u32);
-                    let tile_size = rectangle.width * zoom_scale as f32;
-
-                    let projector = Projector {
-                        viewpoint: self.viewpoint,
-                        cursor: None,
-                        bounds,
-                    };
-
-                    let tile_mercator = new_tile_id.to_mercator();
-                    let screen_pos = projector.mercator_into_screen_space(tile_mercator);
-
-                    let rectangle = Rectangle {
-                        x: screen_pos.x,
-                        y: screen_pos.y,
-                        width: tile_size,
-                        height: tile_size,
-                    };
-
-                    draw_cache.insert(new_tile_id, handle, rectangle, allocation, Animation::new(true));
-
-                    break;
-                }
             }
         }
 
         core::mem::swap(&mut draw_cache, &mut state.draw_cache);
 
-        if let Some(on_update) = self.on_update {
-            let new_projector = Projector {
-                viewpoint: self.viewpoint,
-                cursor: state.cursor,
-                bounds,
-            };
+        let tile_count = state.draw_cache.iter_tiles().count();
+        println!("Number of tiles to draw: {}", tile_count)
 
-            let should_publish = match &prev_projector {
-                Some(prev) => *prev != new_projector,
-                None => true,
-            };
-
-            if should_publish {
-                shell.publish(on_update(new_projector.clone()));
-            }
-
-            state.projector = Some(new_projector);
-        }
     }
 
     fn draw(
@@ -708,8 +691,7 @@ where
     ) {
         println!("DRAW");
 
-        let Some(draw_cache) = WidgetState::get_ref(&tree.state).map(|state| &state.draw_cache)
-        else {
+        let Some(state) = WidgetState::get_ref(&tree.state) else {
             return;
         };
 
@@ -718,16 +700,16 @@ where
         // Create new layer to ensure tiles are clipped,
         // and draw tiles in order of zoom level (lowest first)
         renderer.with_layer(bounds, |renderer| {
-            for data in draw_cache.iter_tiles() {
+            for data in state.draw_cache.iter_tiles() {
                 // Draw tiles that are true-sized in a separate pass later.
                 // Seemingly Iced (or WGPU) does not respect draw order when mixing filter methods
-                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() < 0.1 {
+                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() < 0.01 {
                     continue;
                 }
 
-                let rect = data.rectangle.expand(0.01);
+                let rect = data.rectangle.expand(0.002);
 
-                let image = Image::new(data.handle.clone())
+                let image = Image::new(&data.handle)
                     .snap(false)
                     .filter_method(FilterMethod::Linear);
                 renderer.draw_image(image, rect, rect)
@@ -735,15 +717,15 @@ where
         });
 
         renderer.with_layer(bounds, |renderer| {
-            for data in draw_cache.iter_tiles() {
+            for data in state.draw_cache.iter_tiles() {
                 // These images were drawn in the previous pass
-                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() >= 0.1 {
+                if (data.rectangle.width - self.tile_cache.tile_size() as f32).abs() >= 0.01 {
                     continue;
                 }
 
-                let rect = data.rectangle.expand(0.01);
+                let rect = data.rectangle.expand(0.002);
 
-                let image = Image::new(data.handle.clone())
+                let image = Image::new(&data.handle)
                     .snap(true)
                     .filter_method(FilterMethod::Nearest);
                 renderer.draw_image(image, rect, rect)

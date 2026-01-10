@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::{Animation, Rectangle};
+use iced::{Rectangle};
 use iced_core::image::{Allocation, Handle};
 
 use crate::tile_coord::TileCoord;
@@ -13,13 +13,8 @@ pub struct DrawData {
     pub handle: Handle,
     pub rectangle: Rectangle,
     pub allocation: Allocation,
-    pub state: State,
 }
 
-enum State {
-    Remove,
-    Active(Animation<bool>),
-}
 
 impl Default for DrawCache {
     fn default() -> Self {
@@ -40,7 +35,7 @@ impl DrawCache {
             tiles.retain(|_, draw_data| draw_data.rectangle.intersects(&bounds));
         }
 
-        self.maps.retain(|_, map|!map.is_empty());
+        self.maps.retain(|_, map| !map.is_empty());
     }
 
     /// Remove a tiles handle and allocation for reuse
@@ -62,12 +57,33 @@ impl DrawCache {
             .map(|inner| inner.get_mut(&tile_id.x_y()))
             .flatten()
     }
+    
+    /// Check whether the cache contains some tile
+    pub fn get_ref(&self, tile_id: &TileCoord) -> Option<&DrawData> {
+        self.maps
+            .get(&tile_id.zoom())
+            .map(|inner| inner.get(&tile_id.x_y()))
+            .flatten()
+    }
 
     /// Check whether the cache contains some tile
-    pub fn contains_key(&mut self, tile_id: &TileCoord) -> bool {
+    pub fn contains_key(&self, tile_id: &TileCoord) -> bool {
         self.maps
             .get(&tile_id.zoom())
             .is_some_and(|inner| inner.contains_key(&tile_id.x_y()))
+    }
+
+    /// Get the immediate children (1 level deeper) of a tile that exist in the cache.
+    /// Returns up to 4 child tile IDs.
+    pub fn get_cached_children(&self, tile_id: &TileCoord) -> Vec<TileCoord> {
+        let Some(children) = tile_id.children() else {
+            return Vec::new();
+        };
+
+        children
+            .into_iter()
+            .filter(|child| self.contains_key(child))
+            .collect()
     }
 
     /// Insert a tile using its Id, image handle and its screen-space rectangle
@@ -77,7 +93,6 @@ impl DrawCache {
         handle: Handle,
         rectangle: Rectangle,
         allocation: Allocation,
-        animation: Animation<bool>,
     ) {
         self.maps
             .entry(tile_id.zoom())
@@ -88,7 +103,6 @@ impl DrawCache {
                     handle,
                     rectangle,
                     allocation,
-                    state: State::Active(animation)
                 },
             );
     }
