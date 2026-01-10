@@ -36,13 +36,13 @@ pub struct MapWidget<'a, Message, Theme, Renderer> {
 
 impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
     pub fn new(
-        map: &'a TileCache,
+        tile_cache: &'a TileCache,
         mapper: fn(CacheMessage) -> Message,
-        position: Viewpoint,
+        viewpoint: Viewpoint,
     ) -> Self {
         Self {
-            tile_cache: map,
-            viewpoint: position,
+            tile_cache,
+            viewpoint,
             visible_tiles: Vec::new(),
             children: Vec::new(),
             on_update: None,
@@ -99,15 +99,19 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
 
     /// Use [flood fill algorithm](https://en.wikipedia.org/wiki/Flood_fill) to determine
     /// which tiles need to be drawn..
-    pub fn flood_tiles(&self, viewport: &Rectangle, projector: &Projector) -> Vec<(TileCoord, Rectangle)> {
+    pub fn flood_tiles(
+        &self,
+        viewport: &Rectangle,
+        projector: &Projector,
+    ) -> Vec<(TileCoord, Rectangle)> {
         // Allocate for the number of tiles to fill the screen, and then some
         let capacity = viewport.area() / (BASE_SIZE * BASE_SIZE) as f32;
         let mut tiles = HashMap::with_capacity(capacity.ceil() as usize);
 
         let scale_offset = (BASE_SIZE as f64 / self.tile_cache.tile_size() as f64).log2();
 
-        let scaled_zoom = (self.viewpoint.zoom.f64() + scale_offset)
-            .min(self.tile_cache.max_zoom() as f64);
+        let scaled_zoom =
+            (self.viewpoint.zoom.f64() + scale_offset).min(self.tile_cache.max_zoom() as f64);
 
         let central_tile_id = self.viewpoint.position.tile_id(scaled_zoom.round() as u8);
 
@@ -412,6 +416,12 @@ where
                         .position_over(projector.bounds)
                         .map(|p| projector.mercator_from_screen_space(p));
 
+                    if point.is_some() {
+                        shell.capture_event();
+                    } else {
+                        return;
+                    }
+
                     match delta {
                         iced::mouse::ScrollDelta::Lines { y, .. } => {
                             let current_zoom = self.viewpoint.zoom.f64();
@@ -564,7 +574,6 @@ where
             _ => (),
         }
 
-
         if let Some(on_update) = self.on_update {
             let new_projector = Projector {
                 viewpoint: self.viewpoint,
@@ -626,12 +635,7 @@ where
 
             // Is the desired tile available, then use it.
             if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, &tile_id) {
-                draw_cache.insert(
-                    tile_id,
-                    handle,
-                    rectangle,
-                    allocation,
-                );
+                draw_cache.insert(tile_id, handle, rectangle, allocation);
                 continue;
             }
 
@@ -645,14 +649,15 @@ where
                 let mut num_children_available = 0;
 
                 for child_tile_id in &children {
-
                     // This tile is already set to be drawn
                     if draw_cache.contains_key(child_tile_id) {
                         num_children_available += 1;
-                        continue
+                        continue;
                     }
 
-                    if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, child_tile_id) {
+                    if let Some((handle, allocation)) =
+                        get_tile(&mut state.draw_cache, child_tile_id)
+                    {
                         let child_rectangle = self.position_of_tile(&projector, &child_tile_id);
                         draw_cache.insert(
                             child_tile_id.clone(),
@@ -662,7 +667,7 @@ where
                         );
 
                         num_children_available += 1;
-                        continue
+                        continue;
                     }
                 }
 
@@ -684,12 +689,7 @@ where
 
                 if let Some((handle, allocation)) = get_tile(&mut state.draw_cache, &new_tile_id) {
                     let rectangle = self.position_of_tile(&projector, &new_tile_id);
-                    draw_cache.insert(
-                        new_tile_id,
-                        handle,
-                        rectangle,
-                        allocation,
-                    );
+                    draw_cache.insert(new_tile_id, handle, rectangle, allocation);
                     break;
                 }
 

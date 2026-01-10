@@ -11,6 +11,14 @@ pub struct Viewpoint {
 }
 
 impl Viewpoint {
+    /// Example location centered on Paris, France
+    pub fn new_paris() -> Self {
+        Viewpoint {
+            position: Geographic::new(2.35, 48.85).as_mercator(),
+            zoom: Zoom::try_from(12.0).unwrap(),
+        }
+    }
+
     /// Move the viewpoint to a different location defined by the a [`Mercator`] coordinate
     pub fn move_to_mercator(&mut self, mercator: Mercator) {
         self.position = mercator;

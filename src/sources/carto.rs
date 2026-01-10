@@ -5,7 +5,7 @@ pub enum Scale {
     X1 = 1,
     X2 = 2,
     X4 = 4,
-    X8 = 8
+    X8 = 8,
 }
 
 /// <https://www.openstreetmap.org/about>
@@ -64,10 +64,9 @@ impl super::Source for CartoDark {
 
     /// Size of each tile, should be a multiple of 256.
     fn tile_size(&self) -> u32 {
-        512
+        256 * self.0 as u32
     }
 }
-
 
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]
@@ -95,10 +94,9 @@ impl super::Source for CartoVoyager {
 
     /// Size of each tile, should be a multiple of 256.
     fn tile_size(&self) -> u32 {
-        512
+        256 * self.0 as u32
     }
 }
-
 
 /// <https://www.openstreetmap.org/about>
 #[derive(Debug)]
