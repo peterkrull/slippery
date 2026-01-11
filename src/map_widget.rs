@@ -158,7 +158,7 @@ enum Movement {
     #[default]
     Idle,
     Dragging {
-        mercator: Mercator,
+        drag_mercator: Mercator,
         start_cursor: iced::Point<f32>,
         last_cursor: iced::Point<f32>,
         last_time: Instant,
@@ -392,9 +392,7 @@ where
                     let center_mercator = projector.mercator_from_screen_space(current_center);
                     let target_mercator = projector.mercator_from_screen_space(new_center_screen);
 
-                    let mercator_delta = target_mercator - center_mercator;
-
-                    self.viewpoint.position = self.viewpoint.position + mercator_delta;
+                    self.viewpoint.position.add_sub(target_mercator, center_mercator);
 
                     // Decay the velocity, less so at higher speeds
                     let norm_velocity = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
@@ -487,7 +485,7 @@ where
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                     if let Some(cursor_position) = cursor.position_over(projector.bounds) {
                         state.movement = Movement::Dragging {
-                            mercator: projector.mercator_from_screen_space(cursor_position),
+                            drag_mercator: projector.mercator_from_screen_space(cursor_position),
                             start_cursor: cursor_position,
                             last_cursor: cursor_position,
                             last_time: Instant::now(),
@@ -533,7 +531,7 @@ where
                     state.cursor = Some(*position);
 
                     if let Movement::Dragging {
-                        mercator,
+                        drag_mercator,
                         last_cursor,
                         last_time,
                         velocity,
@@ -542,8 +540,9 @@ where
                     {
                         if self.on_update.is_some() {
                             let cursor_position = projector.mercator_from_screen_space(*position);
-                            let mercator_delta = *mercator - cursor_position;
-                            self.viewpoint.position = self.viewpoint.position + mercator_delta;
+
+                            // Add the difference in drag start position and cursor position
+                            self.viewpoint.position.add_sub(*drag_mercator, cursor_position);
 
                             // Calculate velocity
                             let now = Instant::now();

@@ -24,37 +24,6 @@ pub struct Mercator {
     y: f64,
 }
 
-/// A position on the 2D mercator map projection.
-/// Values range from `[-1 .. =1]` in both
-/// x (east positive) and y (north positive) directions
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MercatorDelta {
-    x: f64,
-    y: f64,
-}
-
-impl core::ops::Sub for Mercator {
-    type Output = MercatorDelta;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        MercatorDelta {
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-        }
-    }
-}
-
-impl core::ops::Add<MercatorDelta> for Mercator {
-    type Output = Mercator;
-
-    fn add(self, rhs: MercatorDelta) -> Self::Output {
-        Mercator {
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
-        }
-    }
-}
-
 impl Mercator {
     pub const fn new(east: f64, north: f64) -> Self {
         Self {
@@ -68,6 +37,15 @@ impl Mercator {
             (self.x * PI).to_degrees(),
             -(self.y * PI).sinh().atan().to_degrees(),
         )
+    }
+
+    /// Add the first argument and subtract the second.
+    /// Useful for adding the difference: `add - sub`
+    pub fn add_sub(&mut self, add: Self, sub: Self) {
+        *self = Mercator::new(
+            add.east_x() - sub.east_x() + self.east_x(),
+            add.north_y() - sub.north_y() + self.north_y(),
+        );
     }
 
     pub fn east_x(&self) -> f64 {
