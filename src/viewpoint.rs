@@ -19,6 +19,14 @@ impl Viewpoint {
         }
     }
 
+    /// Example location centered on Denmark
+    pub fn new_denmark() -> Self {
+        Viewpoint {
+            position: Geographic::new(10.60, 56.00).as_mercator(),
+            zoom: Zoom::try_from(6.0).unwrap(),
+        }
+    }
+
     /// Move the viewpoint to a different location defined by the a [`Mercator`] coordinate
     pub fn move_to_mercator(&mut self, mercator: Mercator) {
         self.position = mercator;

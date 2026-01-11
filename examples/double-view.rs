@@ -35,7 +35,7 @@ impl Application {
             Application {
                 cache: TileCache::new(OpenStreetMap),
                 viewpoint1: Viewpoint::new_paris(),
-                viewpoint2: Viewpoint::new_paris(),
+                viewpoint2: Viewpoint::new_denmark(),
             },
             Task::done(Message::Cache(CacheMessage::LoadTile {
                 id: TileCoord::ZERO,
