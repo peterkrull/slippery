@@ -6,11 +6,6 @@
 use crate::{map_widget::BASE_SIZE, tile_coord::TileCoord};
 use std::f64::consts::PI;
 
-// zoom level   tile coverage  number of tiles  tile size(*) in degrees
-// 0            1 tile         1 tile           360° x 170.1022°
-// 1            2 × 2 tiles    4 tiles          180° x 85.0511°
-// 2            4 × 4 tiles    16 tiles         90° x [variable]
-
 pub(crate) fn total_tiles(zoom: u8) -> u32 {
     2u32.pow(zoom as u32)
 }
@@ -39,20 +34,11 @@ impl Mercator {
         )
     }
 
-    /// Add the first argument and subtract the second.
-    /// Useful for adding the difference: `add - sub`
-    pub fn add_sub(&mut self, add: Self, sub: Self) {
-        *self = Mercator::new(
-            add.east_x() - sub.east_x() + self.east_x(),
-            add.north_y() - sub.north_y() + self.north_y(),
-        );
-    }
-
     pub fn east_x(&self) -> f64 {
         self.x
     }
 
-    pub fn north_y(&self) -> f64 {
+    pub fn south_y(&self) -> f64 {
         self.y
     }
 
@@ -65,14 +51,22 @@ impl Mercator {
         let pixels_half_width = 2f64.powf(zoom - 1.0) * (BASE_SIZE as f64);
         iced::Point::new(
             self.east_x() * pixels_half_width,
-            self.north_y() * pixels_half_width,
+            self.south_y() * pixels_half_width,
         )
     }
 
-    /// Determine the tile id for a given position and zoom level,
-    pub fn tile_id(&self, zoom: u8) -> TileCoord {
+    /// Add the first argument and subtract the second.
+    pub(crate) fn add_sub(&mut self, add: Self, sub: Self) {
+        *self = Mercator::new(
+            add.east_x() - sub.east_x() + self.east_x(),
+            add.south_y() - sub.south_y() + self.south_y(),
+        );
+    }
+    
+    /// Get the tile at this position for the given zoom.
+    pub(crate) fn tile_id(&self, zoom: u8) -> TileCoord {
         let x = (self.east_x() + 1.0) / 2.0;
-        let y = (self.north_y() + 1.0) / 2.0;
+        let y = (self.south_y() + 1.0) / 2.0;
 
         // Map that into a big bitmap made out of web tiles.
         let number_of_tiles = 2u32.pow(zoom as u32);
@@ -96,16 +90,8 @@ impl Geographic {
     pub const fn new(lon: f64, lat: f64) -> Self {
         Self {
             lon: lon.clamp(-180., 180.),
-            lat: lat.clamp(-90., 90.),
+            lat: lat.clamp(-85.05, 85.05),
         }
-    }
-
-    pub fn from_pixel_space(point: iced::Point<f64>, zoom: f64) -> Self {
-        Mercator::from_pixel_space(point, zoom).as_geographic()
-    }
-
-    pub fn into_pixel_space(&self, zoom: f64) -> iced::Point<f64> {
-        self.as_mercator().into_pixel_space(zoom)
     }
 
     pub fn as_mercator(&self) -> Mercator {
@@ -121,6 +107,42 @@ impl Geographic {
 
     pub fn latitude(&self) -> f64 {
         self.lat
+    }
+
+    pub fn from_pixel_space(point: iced::Point<f64>, zoom: f64) -> Self {
+        Mercator::from_pixel_space(point, zoom).as_geographic()
+    }
+
+    pub fn into_pixel_space(&self, zoom: f64) -> iced::Point<f64> {
+        self.as_mercator().into_pixel_space(zoom)
+    }
+}
+
+pub mod location {
+    use super::Geographic;
+
+    pub const fn paris() -> Geographic {
+        Geographic::new(2.35, 48.86)
+    }
+
+    pub const fn london() -> Geographic {
+        Geographic::new(-0.13, 51.51)
+    }
+
+    pub const fn berlin() -> Geographic {
+        Geographic::new(13.39, 52.52)
+    }
+
+    pub const fn rome() -> Geographic {
+        Geographic::new(12.50, 41.90)
+    }
+
+    pub const fn madrid() -> Geographic {
+        Geographic::new(-3.70, 40.42)
+    }
+
+    pub const fn vienna() -> Geographic {
+        Geographic::new(16.38, 48.21)
     }
 }
 

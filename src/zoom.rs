@@ -9,7 +9,7 @@ impl TryFrom<f64> for Zoom {
     type Error = InvalidZoom;
 
     fn try_from(value: f64) -> Result<Self, Self::Error> {
-        if !(0. ..=22.).contains(&value) {
+        if !(Self::MIN.0..=Self::MAX.0).contains(&value) {
             Err(InvalidZoom)
         } else {
             Ok(Self(value))
@@ -32,6 +32,9 @@ impl Default for Zoom {
 }
 
 impl Zoom {
+    pub const MIN: Self = Zoom(0.);
+    pub const MAX: Self = Zoom(20.);
+
     pub fn round(&self) -> u8 {
         self.0.round() as u8
     }

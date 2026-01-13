@@ -1,6 +1,7 @@
-use iced::{self, Element, Task, Theme, widget::row};
+use iced::{self, Element, Task, widget::row};
 use slippery::{
-    CacheMessage, MapWidget, Projector, TileCache, TileCoord, Viewpoint, sources::OpenStreetMap,
+    CacheMessage, MapWidget, Projector, TileCache, TileCoord, Viewpoint, Zoom, location,
+    sources::OpenStreetMap,
 };
 
 fn main() {
@@ -11,7 +12,6 @@ fn main() {
 
     iced::application(Application::boot, Application::update, Application::view)
         .title("Slippery double view example")
-        .theme(Theme::Dark)
         .run()
         .unwrap();
 }
@@ -34,10 +34,16 @@ impl Application {
         (
             Application {
                 cache: TileCache::new(OpenStreetMap),
-                viewpoint1: Viewpoint::new_paris(),
-                viewpoint2: Viewpoint::new_denmark(),
+                viewpoint1: Viewpoint {
+                    position: location::paris().as_mercator(),
+                    zoom: Zoom::try_from(12.0).unwrap(),
+                },
+                viewpoint2: Viewpoint {
+                    position: location::berlin().as_mercator(),
+                    zoom: Zoom::try_from(12.0).unwrap(),
+                },
             },
-            Task::done(Message::Cache(CacheMessage::LoadTile {
+            Task::done(Message::Cache(CacheMessage::Load {
                 id: TileCoord::ZERO,
             })),
         )
@@ -61,9 +67,11 @@ impl Application {
 
     pub fn view(&self) -> impl Into<Element<'_, Message>> {
         row![
-            MapWidget::new(&self.cache, Message::Cache, self.viewpoint1).on_update(Message::MapProjector1),
+            MapWidget::new(&self.cache, Message::Cache, self.viewpoint1)
+                .on_update(Message::MapProjector1),
             iced::widget::rule::vertical(2),
-            MapWidget::new(&self.cache, Message::Cache, self.viewpoint2).on_update(Message::MapProjector2),
+            MapWidget::new(&self.cache, Message::Cache, self.viewpoint2)
+                .on_update(Message::MapProjector2),
         ]
     }
 }

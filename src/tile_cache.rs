@@ -1,13 +1,21 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use iced::Task;
-use iced_core::image::{Allocation, Handle};
+use iced_core::image::{self, Allocation, Handle};
 use tokio::sync::Semaphore;
 
 use crate::{
     sources::{Attribution, Source},
     tile_coord::TileCoord,
 };
+
+const PRUNE_TIME: Duration = Duration::from_secs(60);
+const PRUNE_THRESH: usize = 1024;
 
 #[derive(thiserror::Error, Debug)]
 enum FetcherError {
@@ -24,51 +32,71 @@ enum FetcherError {
 /// or when the fetching future resolves and responds with its result.
 #[derive(Debug, Clone)]
 pub enum CacheMessage {
-    LoadTile {
+    Load {
         id: TileCoord,
     },
-    TileLoaded {
+    Loaded {
         id: TileCoord,
         handle: Handle,
     },
-    TileLoadFailed {
+    LoadFailed {
         id: TileCoord,
     },
-    AllocateTile {
+    Allocate {
         id: TileCoord,
     },
-    TileAllocated {
+    Allocated {
         id: TileCoord,
         alloc: Allocation,
     },
-    TileAllocFailed {
+    AllocFailed {
         id: TileCoord,
-        err: iced::widget::image::Error,
+        err: image::Error,
     },
-    DeallocateTile {
+    Deallocate {
         id: TileCoord,
     },
+    Prune,
 }
 
 #[derive(Debug)]
-pub enum TileEntry {
+pub enum State {
     Loading,
     Loaded(Handle),
     Allocating(Handle),
-    #[allow(unused)]
     Allocated(Handle, Allocation),
+}
+
+#[derive(Debug)]
+struct Entry {
+    state: State,
+    last_used: Cell<Instant>,
+}
+
+impl Entry {
+    fn new(entry: State) -> Self {
+        Self {
+            state: entry,
+            last_used: Cell::new(Instant::now()),
+        }
+    }
+
+    fn touch(&self) {
+        self.last_used.set(Instant::now());
+    }
 }
 
 #[derive(Debug)]
 /// The cache which holds the raster tiles.
 /// An application can hold multiple caches with different tile sources
 pub struct TileCache {
-    cache: HashMap<TileCoord, TileEntry>,
+    cache: HashMap<TileCoord, Entry>,
     fetcher: Arc<HttpFetcher>,
+    cleanup_timer: Instant,
 }
 
 impl TileCache {
-    /// The [`MapState`] acts acts as a stateful backend for the [`MapWidget`]. It returns an instance
+    /// The [`MapState`] acts acts as a stateful backend for the [`crate::MapWidget`]. It returns an instance
     /// of itself, which should be helt along with the map state, as well as a [`iced::Task`] that should be
     /// executed in order allow the backend to request the application to redraw.
     pub fn new(source: impl Source + 'static) -> Self {
@@ -83,6 +111,7 @@ impl TileCache {
                     .build()
                     .unwrap(),
             }),
+            cleanup_timer: Instant::now(),
         }
     }
 
@@ -99,16 +128,31 @@ impl TileCache {
     }
 
     pub fn should_load(&self, tile_id: &TileCoord) -> bool {
-        self.cache.get(tile_id).is_none()
+        if let Some(entry) = self.cache.get(tile_id) {
+            entry.touch();
+            false
+        } else {
+            true
+        }
     }
 
     pub fn should_alloc(&self, tile_id: &TileCoord) -> bool {
-        matches!(self.cache.get(tile_id), Some(TileEntry::Loaded(_)))
+        if let Some(entry) = self.cache.get(tile_id) {
+            entry.touch();
+            matches!(entry.state, State::Loaded(_))
+        } else {
+            false
+        }
     }
 
     pub fn get_drawable(&self, tile_id: &TileCoord) -> Option<(Handle, Allocation)> {
-        match self.cache.get(tile_id) {
-            Some(TileEntry::Allocated(handle, allocation)) => {
+        let entry = self.cache.get(tile_id)?;
+        match entry {
+            Entry {
+                state: State::Allocated(handle, allocation),
+                ..
+            } => {
+                entry.touch();
                 Some((handle.clone(), allocation.clone()))
             }
             _ => None,
@@ -116,85 +160,147 @@ impl TileCache {
     }
 
     pub fn update(&mut self, update: CacheMessage) -> Task<CacheMessage> {
-        match update {
-            CacheMessage::LoadTile { id } => {
-                if !id.valid() || self.cache.contains_key(&id) {
-                    return Task::none();
-                }
+        // Periodically schedule a prune
+        let mut cleanup_task = Task::none();
+        if self.cache.len() > PRUNE_THRESH && self.cleanup_timer.elapsed() > Duration::from_secs(5)
+        {
+            self.cleanup_timer = Instant::now();
+            cleanup_task = Task::done(CacheMessage::Prune);
+        }
 
-                // Insert entry to indicate the tile is being loaded
-                self.cache.insert(id, TileEntry::Loading);
-
-                let handle = self.fetcher.clone();
-                return Task::future(async move {
-                    match handle.fetch_tile(id).await {
-                        Ok(tile) => CacheMessage::TileLoaded { id, handle: tile },
-                        Err(_) => CacheMessage::TileLoadFailed { id },
+        let task = match update {
+            CacheMessage::Prune => {
+                let start_time = Instant::now();
+                let start_size = self.cache.len();
+                let mut prune_count = 0;
+                let prune_target = start_size - PRUNE_THRESH;
+                self.cache.retain(|id, v| {
+                    if prune_count >= prune_target {
+                        return true;
                     }
+
+                    let retain = match v.state {
+                        State::Loading | State::Allocating(_) => true,
+                        // Keep the most zoomed out tiles
+                        _ if id.zoom() < 6 => true,
+                        _ => start_time
+                            .checked_duration_since(v.last_used.get())
+                            .is_none_or(|diff| diff < PRUNE_TIME),
+                    };
+                    if !retain {
+                        prune_count += 1
+                    }
+                    retain
                 });
+                let elapsed = start_time.elapsed();
+                let pruned = start_size - self.cache.len();
+                println!(
+                    "Time to prune: {elapsed:?}, pruned {pruned}, down from {start_size}, now {}",
+                    self.cache.len()
+                );
+                Task::none()
             }
-            CacheMessage::TileLoaded { id, handle } => {
-                self.cache.insert(id, TileEntry::Loaded(handle.clone()));
+            CacheMessage::Load { id } => {
+                if self.cache.contains_key(&id) {
+                    Task::none()
+                } else {
+                    // Insert entry to indicate the tile is being loaded
+                    self.cache.insert(id, Entry::new(State::Loading));
+
+                    let handle = self.fetcher.clone();
+                    Task::future(async move {
+                        match handle.fetch_tile(id).await {
+                            Ok(tile) => CacheMessage::Loaded { id, handle: tile },
+                            Err(_) => CacheMessage::LoadFailed { id },
+                        }
+                    })
+                }
+            }
+            CacheMessage::Loaded { id, handle } => {
+                self.cache
+                    .insert(id, Entry::new(State::Loaded(handle.clone())));
 
                 // Immediately allocate tile with the renderer
-                return Task::done(CacheMessage::AllocateTile { id });
+                Task::done(CacheMessage::Allocate { id })
             }
-            CacheMessage::TileLoadFailed { id } => {
-                if let Some(TileEntry::Loading) = self.cache.get(&id) {
+            CacheMessage::LoadFailed { id } => {
+                if let Some(Entry {
+                    state: State::Loading,
+                    ..
+                }) = self.cache.get(&id)
+                {
                     self.cache.remove(&id);
                 }
+                Task::none()
             }
-            CacheMessage::AllocateTile { id } => {
-                if let Some(entry) = self.cache.get_mut(&id) {
-                    if let TileEntry::Loaded(handle) = entry {
-                        let alloc_task =
-                            iced::widget::image::allocate(handle.clone()).map(move |result| {
-                                match result {
-                                    Ok(alloc) => CacheMessage::TileAllocated { id, alloc },
-                                    Err(err) => CacheMessage::TileAllocFailed { id, err },
-                                }
-                            });
+            CacheMessage::Allocate { id } => {
+                if let Some(entry) = self.cache.get_mut(&id)
+                    && let State::Loaded(handle) = &entry.state
+                {
+                    let alloc_task = iced::widget::image::allocate(handle.clone()).map(
+                        move |result| match result {
+                            Ok(alloc) => CacheMessage::Allocated { id, alloc },
+                            Err(err) => CacheMessage::AllocFailed { id, err },
+                        },
+                    );
 
-                        *entry = TileEntry::Allocating(handle.clone());
+                    entry.state = State::Allocating(handle.clone());
+                    entry.touch();
 
-                        return alloc_task;
-                    }
+                    alloc_task
+                } else {
+                    Task::none()
                 }
             }
-            CacheMessage::TileAllocated {
+            CacheMessage::Allocated {
                 id,
                 alloc: allocation,
             } => {
                 if let Some(entry) = self.cache.get_mut(&id) {
-                    if let TileEntry::Allocating(handle) | TileEntry::Loaded(handle) = entry {
-                        *entry = TileEntry::Allocated(handle.clone(), allocation);
+                    let mut auto_dealloc_task = Task::none();
+                    match &entry.state {
+                        State::Allocating(handle) | State::Loaded(handle) => {
+                            entry.state = State::Allocated(handle.clone(), allocation);
+                            entry.touch();
 
-                        // The allocation is Arc, so widgets will hold on if they need it longer
-                        return Task::future(async move {
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            CacheMessage::DeallocateTile { id }
-                        });
+                            // The allocation is Arc, so widgets will hold on if they need it longer
+                            // Except for the lowest zoom levels, keep those allocated as a last resort 
+                            if id.zoom() > 1 {
+                                auto_dealloc_task = Task::future(async move {
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    CacheMessage::Deallocate { id }
+                                });
+                            }
+                        }
+                        _ => {}
                     }
+                    auto_dealloc_task
+                } else {
+                    Task::none()
                 }
             }
-            CacheMessage::TileAllocFailed { id, err } => {
+            CacheMessage::AllocFailed { id, err } => {
                 log::error!("Unable to allocate tile {id:?} with renderer: {err:?}");
-                if let Some(entry) = self.cache.get_mut(&id) {
-                    if let TileEntry::Allocating(handle) = entry {
-                        *entry = TileEntry::Loaded(handle.clone());
-                    }
+                if let Some(entry) = self.cache.get_mut(&id)
+                    && let State::Allocating(handle) = &entry.state
+                {
+                    entry.state = State::Loaded(handle.clone());
                 }
-            }
-            CacheMessage::DeallocateTile { id } => {
-                if let Some(entry) = self.cache.get_mut(&id) {
-                    if let TileEntry::Allocated(handle, _) = entry {
-                        *entry = TileEntry::Loaded(handle.clone());
-                    }
-                }
-            }
-        }
 
-        Task::none()
+                Task::none()
+            }
+            CacheMessage::Deallocate { id } => {
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    // Downgrade from Allocated to Loaded by dropping the Allocation
+                    if let State::Allocated(handle, _) = &entry.state {
+                        entry.state = State::Loaded(handle.clone());
+                    }
+                }
+                Task::none()
+            }
+        };
+
+        Task::batch([cleanup_task, task])
     }
 }
 
