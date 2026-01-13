@@ -69,6 +69,7 @@ impl StressTest {
                 viewpoint: Viewpoint {
                     position: center.as_mercator(),
                     zoom: Zoom::try_from(12.0).unwrap(),
+                    rotation: 0.0,
                 },
                 points,
                 dragged_point: None,

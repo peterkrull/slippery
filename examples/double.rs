@@ -37,10 +37,12 @@ impl Application {
                 viewpoint1: Viewpoint {
                     position: location::paris().as_mercator(),
                     zoom: Zoom::try_from(12.0).unwrap(),
+                    rotation: 0.0,
                 },
                 viewpoint2: Viewpoint {
                     position: location::berlin().as_mercator(),
                     zoom: Zoom::try_from(12.0).unwrap(),
+                    rotation: 0.0,
                 },
             },
             Task::done(Message::Cache(CacheMessage::Load {

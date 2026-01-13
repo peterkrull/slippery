@@ -44,6 +44,7 @@ impl Application {
                     // Start view centered on Europe
                     position: Geographic::new(10.0, 50.0).as_mercator(),
                     zoom: Zoom::try_from(4.0).unwrap(),
+                    rotation: 0.0,
                 },
             },
             Task::done(Message::Cache(CacheMessage::Load {

@@ -78,9 +78,13 @@ impl Projector {
         let center_pixel_space = self.viewpoint.into_pixel_space().round_ceil();
 
         let point_offset = point - self.bounds.center();
-        let point_offset = Vector::new(point_offset.x as f64, point_offset.y as f64);
+        let (sin, cos) = self.viewpoint.rotation.sin_cos();
 
-        center_pixel_space + point_offset
+        // Rotate the screen offset to align with the map
+        let x = point_offset.x as f64 * cos - point_offset.y as f64 * sin;
+        let y = point_offset.x as f64 * sin + point_offset.y as f64 * cos;
+
+        center_pixel_space + Vector::new(x, y)
     }
 
     /// Converts from a pixel space point representation to screen space.
@@ -94,9 +98,13 @@ impl Projector {
         let center_pixel_space = self.viewpoint.into_pixel_space().round_ceil();
 
         let position_offset = point - center_pixel_space;
-        let position_offset = Vector::new(position_offset.x as f32, position_offset.y as f32);
+        let (sin, cos) = self.viewpoint.rotation.sin_cos();
 
-        self.bounds.center() + position_offset
+        // Rotate the world offset to align with the screen
+        let x = position_offset.x * cos + position_offset.y * sin;
+        let y = -position_offset.x * sin + position_offset.y * cos;
+
+        self.bounds.center() + Vector::new(x as f32, y as f32)
     }
 
     /// Convenience method to convert a [`Geographic`] coordinate directly
@@ -124,6 +132,7 @@ mod tests {
             viewpoint: crate::Viewpoint {
                 position: Mercator::new(0.25, -0.33),
                 zoom: Zoom::try_from(10.0).unwrap(),
+                rotation: 0.0,
             },
             cursor: Default::default(),
             bounds: Rectangle {

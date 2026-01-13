@@ -8,9 +8,17 @@ use crate::{Geographic, Mercator, Zoom};
 pub struct Viewpoint {
     pub position: Mercator,
     pub zoom: Zoom,
+    pub rotation: f64,
 }
 
 impl Viewpoint {
+    pub fn new(position: Mercator, zoom: Zoom, rotation: f64) -> Self {
+        Self {
+            position,
+            zoom,
+            rotation,
+        }
+    }
 
     /// Move the viewpoint to a different location defined by the a [`Mercator`] coordinate
     pub fn move_to_mercator(&mut self, mercator: Mercator) {
@@ -31,7 +39,17 @@ impl Viewpoint {
     pub fn position_in_viewport(&self, position: Point, bounds: Rectangle) -> Mercator {
         // Get cursor position relative to viewport center
         let cursor_offset = position - bounds.center();
-        let cursor_offset = Vector::new(cursor_offset.x as f64, cursor_offset.y as f64);
+
+        let cursor_offset = if self.rotation != 0.0 {
+            let (sin, cos) = self.rotation.sin_cos();
+    
+            // Rotate the screen offset to align with the map
+            let x = cursor_offset.x as f64 * cos - cursor_offset.y as f64 * sin;
+            let y = cursor_offset.x as f64 * sin + cursor_offset.y as f64 * cos;
+            Vector::new(x, y)
+        } else {
+            Vector::new(cursor_offset.x as f64, cursor_offset.y as f64)
+        };
 
         // Temporarily shift the viewport to be centered over the cursor
         let center_pixel_space = self.position.into_pixel_space(self.zoom.f64());
@@ -43,7 +61,18 @@ impl Viewpoint {
     pub fn zoom_on_point(&mut self, zoom_amount: f64, position: Point, bounds: Rectangle) {
         // Get cursor position relative to viewport center
         let cursor_offset = position - bounds.center();
-        let cursor_offset = Vector::new(cursor_offset.x as f64, cursor_offset.y as f64);
+
+        // Rotate the screen offset to align with the map
+        let cursor_offset = if self.rotation != 0.0 {
+            let (sin, cos) = self.rotation.sin_cos();
+    
+            // Rotate the screen offset to align with the map
+            let x = cursor_offset.x as f64 * cos - cursor_offset.y as f64 * sin;
+            let y = cursor_offset.x as f64 * sin + cursor_offset.y as f64 * cos;
+            Vector::new(x, y)
+        } else {
+            Vector::new(cursor_offset.x as f64, cursor_offset.y as f64)
+        };
 
         // Temporarily shift the viewport to be centered over the cursor
         let center_pixel_space = self.position.into_pixel_space(self.zoom.f64());

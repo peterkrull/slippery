@@ -6,13 +6,14 @@ use std::{
 };
 
 use iced_core::{
-    Element, Image, Point, Rectangle, Shell, Vector, Widget,
-    image::{Allocation, FilterMethod, Handle},
+    Element, Point, Rectangle, Vector, Widget,
+    image::Handle,
     widget::tree::State,
 };
+use iced::widget::canvas;
 
 use crate::{
-    Projector, RoundCeil, Viewpoint, Zoom,
+    Projector, Viewpoint, Zoom,
     draw_cache::DrawCache,
     position::Mercator,
     tile_cache::{CacheMessage, TileCache},
@@ -57,32 +58,41 @@ impl<'a, Message> MapWidget<'a, Message> {
         }
     }
 
-    pub fn position_of_tile(&self, projector: &Projector, tile_id: &TileCoord) -> Rectangle {
+    pub fn tile_pixel_layout(&self, tile_id: &TileCoord) -> (Point<f64>, f32) {
         let tile_size = self.tile_cache.tile_size() as f64;
         let scale_offset = (BASE_SIZE as f64 / tile_size).log2();
 
         let scale = 2.0_f64.powf(self.viewpoint.zoom.f64() - tile_id.zoom() as f64);
         let size = (tile_size * 2.0_f64.powf(scale_offset) * scale) as f32;
 
-        let tile_mercator = tile_id.to_mercator();
-        let screen_pos = projector.mercator_into_screen_space(tile_mercator);
-
-        Rectangle {
-            x: screen_pos.x,
-            y: screen_pos.y,
-            width: size,
-            height: size,
-        }
+        let tl = tile_id.to_mercator();
+        (
+            tl.into_pixel_space(self.viewpoint.zoom.f64()),
+            size,
+        )
     }
 
     /// Use [flood fill algorithm](https://en.wikipedia.org/wiki/Flood_fill) to determine
     /// which tiles need to be drawn..
-    pub fn flood_tiles(&self, projector: &Projector) -> Vec<(TileCoord, Rectangle)> {
-        // Slightly expand the bounds to load in tiles which may be panned to
-        let viewport = projector.bounds.expand(32);
+    pub fn flood_tiles(&self, projector: &Projector) -> Vec<(TileCoord, Point<f64>, f32)> {
+        // Project Screen AABB to Pixel Space AABB
+        // We use this to test for tile visibility
+        let bounds = projector.bounds.expand(32.0);
+        let tl = projector.screen_space_into_pixel_space(Point::new(bounds.x, bounds.y));
+        let tr = projector.screen_space_into_pixel_space(Point::new(bounds.x + bounds.width, bounds.y));
+        let bl = projector.screen_space_into_pixel_space(Point::new(bounds.x, bounds.y + bounds.height));
+        let br = projector
+            .screen_space_into_pixel_space(Point::new(bounds.x + bounds.width, bounds.y + bounds.height));
+
+        let min_x = tl.x.min(tr.x).min(bl.x).min(br.x);
+        let max_x = tl.x.max(tr.x).max(bl.x).max(br.x);
+        let min_y = tl.y.min(tr.y).min(bl.y).min(br.y);
+        let max_y = tl.y.max(tr.y).max(bl.y).max(br.y);
+
+        let pixel_viewport = (min_x, min_y, max_x, max_y);
 
         // Allocate for the number of tiles to fill the screen, and then some
-        let capacity = viewport.area() / self.tile_cache.tile_size().pow(2) as f32;
+        let capacity = bounds.area() / self.tile_cache.tile_size().pow(2) as f32;
         let mut tiles = HashMap::with_capacity(capacity.ceil() as usize);
 
         // This ensures tilesets of different sizes
@@ -94,32 +104,47 @@ impl<'a, Message> MapWidget<'a, Message> {
         let central_tile_id = self.viewpoint.position.tile_id(scaled_zoom.round() as u8);
 
         // Recursively fill up the `tiles` map
-        self.flood_tiles_inner(projector, &viewport, central_tile_id, &mut tiles);
+        self.flood_tiles_inner(projector, pixel_viewport, central_tile_id, &mut tiles);
 
         // Convert the map into a vec of id-uv pairs
         tiles
             .drain()
-            .filter_map(|(id, tile)| tile.map(|tile| (id, tile)))
+            .filter_map(|(id, tile)| tile.map(|(pt, sz)| (id, pt, sz)))
             .collect()
     }
 
     fn flood_tiles_inner(
         &self,
         projector: &Projector,
-        viewport: &Rectangle,
+        viewport: (f64, f64, f64, f64),
         tile_id: TileCoord,
-        tiles: &mut HashMap<TileCoord, Option<Rectangle>>,
+        tiles: &mut HashMap<TileCoord, Option<(Point<f64>, f32)>>,
     ) {
         // Return early if this entry has already been checked
         let Entry::Vacant(entry) = tiles.entry(tile_id) else {
             return;
         };
 
-        let rectangle = self.position_of_tile(&projector, &tile_id);
+        let (top_left, size) = self.tile_pixel_layout(&tile_id);
+        let half_size = (size / 2.0) as f64;
+        let center = top_left + Vector::new(half_size, half_size);
+
+        // Tile AABB in Pixel Space
+        let t_min_x = center.x - half_size;
+        let t_max_x = center.x + half_size;
+        let t_min_y = center.y - half_size;
+        let t_max_y = center.y + half_size;
+        
+        // Intersection check
+        let (v_min_x, v_min_y, v_max_x, v_max_y) = viewport;
+        let intersects = t_min_x < v_max_x
+            && t_max_x > v_min_x
+            && t_min_y < v_max_y
+            && t_max_y > v_min_y;
 
         // Accept the tile if it intersects the viewport
-        if viewport.intersects(&rectangle) {
-            entry.insert(Some(rectangle));
+        if intersects {
+            entry.insert(Some((center, size)));
 
             // Recurse using all valid neighbors
             for &neigbor_tile_id in tile_id.neighbors().iter().flatten() {
@@ -128,82 +153,6 @@ impl<'a, Message> MapWidget<'a, Message> {
         } else {
             entry.insert(None);
         }
-    }
-
-    fn fallback_to_children(
-        &self,
-        old_draw_cache: &mut DrawCache,
-        draw_cache: &mut DrawCache,
-        tile_id: TileCoord,
-        projector: &Projector,
-    ) -> bool {
-        if let Some(children) = tile_id.children() {
-            let mut num_children_available = 0;
-
-            for child_tile_id in &children {
-                if let Some((handle, allocation)) =
-                    self.get_drawable_tile(old_draw_cache, child_tile_id)
-                {
-                    let child_rectangle = self.position_of_tile(projector, child_tile_id);
-                    draw_cache.insert(*child_tile_id, handle, child_rectangle, allocation);
-
-                    num_children_available += 1;
-                }
-            }
-
-            // If we found all children, skip parent fallback
-            return num_children_available == 4;
-        }
-
-        false
-    }
-
-    fn fallback_to_ancestor(
-        &self,
-        old_draw_cache: &mut DrawCache,
-        draw_cache: &mut DrawCache,
-        tile_id: &TileCoord,
-        projector: &Projector,
-        shell: &mut Shell<'_, Message>,
-    ) -> bool {
-        // If there is not full child coverage, fall back to a parent tile
-        let mut new_tile_id = *tile_id;
-        while let Some(parent_tile_id) = new_tile_id.parent() {
-            new_tile_id = parent_tile_id;
-
-            // This tile is already set to be drawn
-            if draw_cache.contains_key(&new_tile_id) {
-                break;
-            }
-
-            if let Some((handle, allocation)) = self.get_drawable_tile(old_draw_cache, &new_tile_id)
-            {
-                let rectangle = self.position_of_tile(&projector, &new_tile_id);
-                draw_cache.insert(new_tile_id, handle, rectangle, allocation);
-                return true;
-            }
-
-            // Ensure the tile is allocated. Even though we are also allocating
-            // the intended tile, this should ensure the parent is ready as a backup
-            // for other potentially missing tiles as well.
-            if self.tile_cache.should_alloc(&new_tile_id) {
-                shell.publish((self.cache_message)(CacheMessage::Allocate {
-                    id: new_tile_id,
-                }))
-            }
-        }
-
-        false
-    }
-
-    fn get_drawable_tile(
-        &self,
-        old_draw_cache: &mut DrawCache,
-        tile_id: &TileCoord,
-    ) -> Option<(Handle, Allocation)> {
-        old_draw_cache
-            .remove(tile_id)
-            .or_else(|| self.tile_cache.get_drawable(tile_id))
     }
 }
 
@@ -223,12 +172,33 @@ enum PanMove {
     },
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
+enum RotationMove {
+    #[default]
+    Idle,
+    Rotating {
+        last_cursor_x: f32,
+    },
+}
+
 struct WidgetState {
     pan_move: PanMove,
     zoom_move: ZoomMove,
+    rotation_move: RotationMove,
     cursor: Option<Point>,
     draw_cache: DrawCache,
+}
+
+impl Default for WidgetState {
+    fn default() -> Self {
+        Self {
+            pan_move: Default::default(),
+            zoom_move: Default::default(),
+            rotation_move: Default::default(),
+            cursor: None,
+            draw_cache: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -254,22 +224,22 @@ enum ZoomMove {
 impl WidgetState {
     /// Get a mutable reference to the widget state,
     /// initializing it, if it is not already.
-    pub fn get_mut(state: &mut State) -> &mut WidgetState {
+    pub fn get_mut(state: &mut State) -> &mut Self {
         match state {
             State::None => {
-                *state = State::new(WidgetState::default());
-                state.downcast_mut::<WidgetState>()
+                *state = State::new(Self::default());
+                state.downcast_mut::<Self>()
             }
             State::Some(any) => any
-                .downcast_mut::<WidgetState>()
+                .downcast_mut::<Self>()
                 .expect("Widget state of incorrect type"),
         }
     }
 
-    pub fn get_ref(state: &State) -> Option<&WidgetState> {
+    pub fn get_ref(state: &State) -> Option<&Self> {
         match state {
             State::None => None,
-            State::Some(any) => any.downcast_ref::<WidgetState>(),
+            State::Some(any) => any.downcast_ref::<Self>(),
         }
     }
 }
@@ -278,7 +248,8 @@ impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for MapWidge
 where
     Renderer: iced_core::image::Renderer<Handle = Handle>
         + iced_core::Renderer
-        + iced_graphics::geometry::Renderer,
+        + iced_graphics::geometry::Renderer
+        + 'static,
 {
     fn size(&self) -> iced::Size<iced::Length> {
         iced::Size {
@@ -486,6 +457,14 @@ where
 
                     needs_redraw = true;
                 }
+                iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Right) => {
+                    if let Some(cursor_position) = cursor.position_over(projector.bounds) {
+                        shell.capture_event();
+                        state.rotation_move = RotationMove::Rotating {
+                            last_cursor_x: cursor_position.x,
+                        };
+                    }
+                }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                     if let Some(cursor_position) = cursor.position_over(projector.bounds) {
                         state.pan_move = PanMove::Dragging {
@@ -519,8 +498,30 @@ where
                         _ => (),
                     }
                 }
+                iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Right) => {
+                    match state.rotation_move {
+                        RotationMove::Rotating { .. } => {
+                            state.rotation_move = RotationMove::Idle;
+                            shell.capture_event();
+                        }
+                        _ => (),
+                    }
+                }
                 iced::mouse::Event::CursorMoved { position } => {
                     state.cursor = Some(*position);
+
+                    if let RotationMove::Rotating { last_cursor_x } = &mut state.rotation_move {
+                        if self.on_update.is_some() {
+                            let delta = position.x - *last_cursor_x;
+
+                            // Sensitivity: 100 pixels = 45 degrees
+                            let sensitivity = 45.0f64.to_radians() / 200.0;
+                            self.viewpoint.rotation -= delta as f64 * sensitivity;
+
+                            *last_cursor_x = position.x;
+                            needs_redraw = true;
+                        }
+                    }
 
                     if let PanMove::Dragging {
                         drag_mercator,
@@ -571,11 +572,14 @@ where
             bounds,
         };
 
-        if projector.viewpoint != self.viewpoint || needs_redraw {
+        if self.viewpoint != projector.viewpoint {
             if let Some(on_update) = &self.on_update {
                 shell.publish(on_update(new_projector.clone()));
             }
             shell.capture_event();
+        }
+
+        if needs_redraw {
             shell.request_redraw();
         }
 
@@ -586,31 +590,42 @@ where
         // Construct vector of tiles that should be fetched
         let mut to_fetch = visible_tiles
             .iter()
-            .filter(|(tile_id, _)| self.tile_cache.should_load(&tile_id))
+            .filter(|(tile_id, _, _)| self.tile_cache.should_load(&tile_id))
             .collect::<Vec<_>>();
 
         // Sort them in order of distance to cursor (if available) or viewport center
-        to_fetch.sort_by(|(_, rect1), (_, rect2)| {
-            let center = state.cursor.unwrap_or_else(|| bounds.center());
-            let dist1 = center.distance(rect1.center());
-            let dist2 = center.distance(rect2.center());
+        let ref_point_screen = state.cursor.unwrap_or_else(|| bounds.center());
+        let ref_point_pixel = new_projector.screen_space_into_pixel_space(ref_point_screen);
+        to_fetch.sort_by(|(_, center1, _), (_, center2, _)| {
+            let dist1 = ref_point_pixel.distance(*center1);
+            let dist2 = ref_point_pixel.distance(*center2);
             dist1.partial_cmp(&dist2).unwrap_or(Ordering::Equal)
         });
 
         // Enqueue loading of missing tiles with shell
-        for (tile_id, _) in to_fetch {
+        for (tile_id, _, _) in to_fetch {
             shell.publish((self.cache_message)(CacheMessage::Load {
                 id: *tile_id,
             }))
         }
 
         let mut new_draw_cache = DrawCache::new();
-        for (tile_id, rectangle) in visible_tiles.into_iter() {
+
+        // Helper closure to consolidate sourcing
+        let mut get_drawable = |tile_id: &TileCoord| {
+            if let Some(res) = state.draw_cache.remove(tile_id) {
+                return Some(res);
+            }
+            if let Some(res) = self.tile_cache.get_drawable(tile_id) {
+                return Some(res); // New tile found
+            }
+            None
+        };
+
+        for (tile_id, center, size) in visible_tiles.into_iter() {
             // Is the desired tile available, then use it.
-            if let Some((handle, allocation)) =
-                self.get_drawable_tile(&mut state.draw_cache, &tile_id)
-            {
-                new_draw_cache.insert(tile_id, handle, rectangle, allocation);
+            if let Some((handle, allocation)) = get_drawable(&tile_id) {
+                new_draw_cache.insert(tile_id, handle, center, size, allocation);
                 continue;
             }
 
@@ -622,25 +637,63 @@ where
             }
 
             // Try to use four children as a fallback (too fine resolution)
-            if self.fallback_to_children(
-                &mut state.draw_cache,
-                &mut new_draw_cache,
-                tile_id,
-                &projector,
-            ) {
+            let mut has_children = false;
+            if let Some(children) = tile_id.children() {
+                let mut num_children_available = 0;
+
+                for child_tile_id in &children {
+                    if let Some((handle, allocation)) = get_drawable(child_tile_id) {
+                        let (child_tl, child_size) = self.tile_pixel_layout(child_tile_id);
+                        let child_center = child_tl + Vector::new(child_size as f64 / 2.0, child_size as f64 / 2.0);
+                        new_draw_cache.insert(
+                            *child_tile_id,
+                            handle,
+                            child_center,
+                            child_size,
+                            allocation,
+                        );
+
+                        num_children_available += 1;
+                    }
+                }
+
+                if num_children_available == 4 {
+                    has_children = true;
+                }
+            }
+
+            if has_children {
                 continue;
             }
 
             // Otherwise find an available ancestor (too course resolution)
-            if self.fallback_to_ancestor(
-                &mut state.draw_cache,
-                &mut new_draw_cache,
-                &tile_id,
-                &projector,
-                shell,
-            ) {
-                continue;
+            let mut parent_tile_id = tile_id;
+            while let Some(pid) = parent_tile_id.parent() {
+                parent_tile_id = pid;
+
+                // This tile is already set to be drawn
+                if new_draw_cache.contains_key(&parent_tile_id) {
+                    break;
+                }
+
+                if let Some((handle, allocation)) = get_drawable(&parent_tile_id) {
+                    let (tl, size) = self.tile_pixel_layout(&parent_tile_id);
+                    let center = tl + Vector::new(size as f64 / 2.0, size as f64 / 2.0);
+                    new_draw_cache.insert(parent_tile_id, handle, center, size, allocation);
+                    break;
+                }
+
+                // Ensure the tile is allocated
+                if self.tile_cache.should_alloc(&parent_tile_id) {
+                    shell.publish((self.cache_message)(CacheMessage::Allocate {
+                        id: parent_tile_id,
+                    }))
+                }
             }
+        }
+
+        if new_draw_cache != state.draw_cache {
+            shell.request_redraw();
         }
 
         // Swap in the new cache, dropping all unused allocations from the old one
@@ -665,36 +718,50 @@ where
         let state = WidgetState::get_ref(&tree.state)
             .expect("draw called prior to initializing widget state");
 
-        // Also do not snap while the map has momentum
-        let has_momentum = matches!(state.pan_move, PanMove::Momentum { .. });
-        let integer_zoom =
-            (self.viewpoint.zoom.f32().round() - self.viewpoint.zoom.f32()).abs() < f32::EPSILON;
+        let bounds = layout.bounds();
 
-        let clip_bounds = layout.bounds();
+        // Projector for this frame
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            cursor: state.cursor,
+            bounds,
+        };
 
-        // Draw all tiles in order of zoom level (lowest first)
-        renderer.with_layer(clip_bounds, |renderer| {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        renderer.with_layer(bounds, |renderer|{
+
             for data in state.draw_cache.iter_tiles() {
-                let img_bounds = if !has_momentum && integer_zoom {
-                    // This is different than just rounding (or round_ties_even)
-                    // since this will always round up at .5, both for negative and
-                    // positive numbers. This fixes some weirdness when the layout
-                    // bounds are not a whole number, and some tiles have x/y coordinates
-                    // in the negatives.
-                    Rectangle {
-                        x: data.rectangle.x.round_ceil(),
-                        y: data.rectangle.y.round_ceil(),
-                        width: data.rectangle.width,
-                        height: data.rectangle.height,
-                    }
-                } else {
-                    data.rectangle
-                };
+                let center = data.center;
+                let size = data.size;
 
-                let image = Image::new(&data.handle).filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, img_bounds, clip_bounds)
+                let half_size = size / 2.0;
+
+                // Project Pixel Space -> Screen Space
+                let screen_pos = projector.pixel_space_into_screen_space(center);
+
+                let relative_x = screen_pos.x - bounds.x;
+                let relative_y = screen_pos.y - bounds.y;
+                let relative_pos = Point::new(relative_x, relative_y);
+
+                let dest = Rectangle::new(
+                        relative_pos - Vector::new(half_size, half_size),
+                        iced::Size::new(size, size),
+                    ).expand(1e-2);
+                let image = canvas::Image::new(data.handle.clone())
+                    .rotation(-self.viewpoint.rotation as f32);
+
+                frame.draw_image(dest, image);
             }
+
+            let geometry = frame.into_geometry();
+            let translation = Vector::new(bounds.x, bounds.y);
+
+            renderer.with_translation(translation, |renderer| {
+                renderer.draw_geometry(geometry);
+            });
         });
+
     }
 
     fn mouse_interaction(
@@ -715,6 +782,10 @@ where
             PanMove::Dragging { .. } => return Interaction::Grabbing,
             _ => (),
         };
+
+        if let RotationMove::Rotating { .. } = state.rotation_move {
+            return Interaction::Grabbing;
+        }
 
         // Then zooming should have the appropriate cursor
         match state.zoom_move {
@@ -746,7 +817,7 @@ where
 impl<'a, Message: 'a, Theme: 'a, Renderer: 'a> From<MapWidget<'a, Message>>
     for Element<'a, Message, Theme, Renderer>
 where
-    Renderer: iced_core::image::Renderer<Handle = Handle> + iced_graphics::geometry::Renderer,
+    Renderer: iced_core::image::Renderer<Handle = Handle> + iced_graphics::geometry::Renderer + 'static,
 {
     fn from(value: MapWidget<'a, Message>) -> Self {
         Self::new(value)

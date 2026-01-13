@@ -1,6 +1,7 @@
 use iced::mouse;
 use iced::widget::canvas::{self, Path, Stroke};
 use iced::{self, Color, Element, Task};
+use slippery::sources::ArcGisWorldMap;
 use slippery::{
     CacheMessage, Geographic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
     sources::OpenStreetMap,
@@ -44,10 +45,11 @@ impl Application {
     pub fn boot() -> (Self, Task<Message>) {
         (
             Application {
-                cache: TileCache::new(OpenStreetMap),
+                cache: TileCache::new(ArcGisWorldMap),
                 viewpoint: Viewpoint {
                     position: Geographic::new(10.0, 50.0).as_mercator(),
                     zoom: Zoom::try_from(4.).unwrap(),
+                    rotation: 0.0,
                 },
                 // Initial triangle vertices
                 vertices: vec![PARIS, LONDON, BRUSSELS],

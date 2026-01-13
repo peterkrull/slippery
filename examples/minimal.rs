@@ -29,6 +29,7 @@ impl Application {
             viewpoint: Viewpoint {
                 position: location::paris().as_mercator(),
                 zoom: Zoom::try_from(12.0).unwrap(),
+                rotation: 0.0,
             },
         }
     }

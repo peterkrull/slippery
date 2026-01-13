@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::Rectangle;
+use iced::Point;
 use iced_core::image::{Allocation, Handle};
 
 use crate::tile_coord::TileCoord;
@@ -11,8 +11,45 @@ pub(crate) struct DrawCache {
 
 pub struct DrawData {
     pub handle: Handle,
-    pub rectangle: Rectangle,
+    pub center: Point<f64>,
+    pub size: f32,
     pub allocation: Allocation,
+}
+
+impl PartialEq for DrawData {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+            && self.center == other.center
+            && self.size == other.size
+        // Allocation is not checked, assuming handle uniqueness is sufficient
+    }
+}
+
+impl PartialEq for DrawCache {
+    fn eq(&self, other: &Self) -> bool {
+        if self.maps.len() != other.maps.len() {
+            return false;
+        }
+
+        for (zoom, map) in &self.maps {
+            match other.maps.get(zoom) {
+                Some(other_map) => {
+                    if map.len() != other_map.len() {
+                        return false;
+                    }
+
+                    for (coord, data) in map {
+                        if other_map.get(coord) != Some(data) {
+                            return false;
+                        }
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
+    }
 }
 
 impl Default for DrawCache {
@@ -47,12 +84,13 @@ impl DrawCache {
             .is_some_and(|inner| inner.contains_key(&tile_id.x_y()))
     }
 
-    /// Insert a tile using its Id, image handle and its screen-space rectangle
+    /// Insert a tile using its Id, image handle and its pixel-space center/size
     pub fn insert(
         &mut self,
         tile_id: TileCoord,
         handle: Handle,
-        rectangle: Rectangle,
+        center: Point<f64>,
+        size: f32,
         allocation: Allocation,
     ) {
         self.maps
@@ -62,7 +100,8 @@ impl DrawCache {
                 tile_id.x_y(),
                 DrawData {
                     handle,
-                    rectangle,
+                    center,
+                    size,
                     allocation,
                 },
             );

@@ -41,6 +41,7 @@ impl PopupExample {
                 viewpoint: Viewpoint {
                     position: location::paris().as_mercator(),
                     zoom: Zoom::try_from(12.0).unwrap(),
+                    rotation: 0.0,
                 },
                 point_position: location::paris(),
                 is_dragging: false,
