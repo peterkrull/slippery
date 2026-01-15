@@ -645,11 +645,6 @@ where
 
         // Swap in the new cache, dropping all unused allocations from the old one
         core::mem::swap(&mut new_draw_cache, &mut state.draw_cache);
-
-        let num_tiles = state.draw_cache.iter_tiles().count();
-        if num_tiles > 100 {
-            println!("Drawing {num_tiles} tiles")
-        }
     }
 
     fn draw(
