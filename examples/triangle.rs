@@ -2,7 +2,7 @@ use iced::mouse;
 use iced::widget::canvas::{self, Path, Stroke};
 use iced::{self, Color, Element, Task};
 use slippery::{
-    CacheMessage, Geographic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
+    CacheMessage, Geodetic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
     sources::OpenStreetMap,
 };
 
@@ -25,20 +25,20 @@ enum Message {
     HoverVertex(Option<usize>),
     StartDrag(usize),
     EndDrag,
-    MoveVertex(Geographic),
+    MoveVertex(Geodetic),
 }
 
 struct Application {
     cache: TileCache,
     viewpoint: Viewpoint,
-    vertices: Vec<Geographic>,
+    vertices: Vec<Geodetic>,
     hovered_vertex: Option<usize>,
     dragging_vertex: Option<usize>,
 }
 
-const PARIS: Geographic = Geographic::new(2.3522, 48.8566);
-const LONDON: Geographic = Geographic::new(-0.1278, 51.5074);
-const BRUSSELS: Geographic = Geographic::new(4.3517, 50.8503);
+const PARIS: Geodetic = Geodetic::new(2.3522, 48.8566);
+const LONDON: Geodetic = Geodetic::new(-0.1278, 51.5074);
+const BRUSSELS: Geodetic = Geodetic::new(4.3517, 50.8503);
 
 impl Application {
     pub fn boot() -> (Self, Task<Message>) {
@@ -46,7 +46,7 @@ impl Application {
             Application {
                 cache: TileCache::new(OpenStreetMap),
                 viewpoint: Viewpoint {
-                    position: Geographic::new(10.0, 50.0).as_mercator(),
+                    position: Geodetic::new(10.0, 50.0).as_mercator(),
                     zoom: Zoom::try_from(4.).unwrap(),
                 },
                 // Initial triangle vertices
@@ -102,9 +102,9 @@ impl Application {
                 let mut iterator = vertices.iter().cloned();
                 if let Some(vertex) = iterator.next() {
                     let triangle = Path::new(|builder| {
-                        builder.move_to(projector.geographic_into_screen_space(vertex));
+                        builder.move_to(projector.geodetic_into_screen_space(vertex));
                         for vertex in iterator {
-                            builder.line_to(projector.geographic_into_screen_space(vertex));
+                            builder.line_to(projector.geodetic_into_screen_space(vertex));
                         }
                         builder.close();
                     });
@@ -123,7 +123,7 @@ impl Application {
 
                 // 2. Draw Points (Interactive Handles)
                 for (i, vertex) in vertices.iter().enumerate() {
-                    let pos = projector.geographic_into_screen_space(*vertex);
+                    let pos = projector.geodetic_into_screen_space(*vertex);
 
                     let (radius, color) = if dragging_vertex == Some(i) {
                         (10.0, Color::from_rgb(1.0, 0.0, 0.0)) // Red when dragging
@@ -155,9 +155,9 @@ impl Application {
 
                                 // Handling Dragging
                                 if let Some(_) = dragging_vertex {
-                                    // Project cursor back to Geographic to move vertex
+                                    // Project cursor back to Geodetic to move vertex
                                     let mercator = projector.screen_space_into_mercator(cursor_pos);
-                                    let geo = mercator.as_geographic();
+                                    let geo = mercator.as_geodetic();
                                     return Action::Capture(Message::MoveVertex(geo));
                                 }
 
@@ -165,7 +165,7 @@ impl Application {
                                 // Check if cursor is over any vertex
                                 for (i, vertex) in vertices_interact.iter().enumerate() {
                                     let screen_pos =
-                                        projector.geographic_into_screen_space(*vertex);
+                                        projector.geodetic_into_screen_space(*vertex);
                                     if screen_pos.distance(cursor_pos) < 10.0 {
                                         if hovered_vertex != Some(i) {
                                             return Action::Publish(Message::HoverVertex(Some(i)));

@@ -12,7 +12,7 @@ use iced_core::{
 };
 
 use crate::{
-    Projector, RoundCeil, Viewpoint, Zoom,
+    Projector, Viewpoint, Zoom,
     draw_cache::DrawCache,
     position::Mercator,
     tile_cache::{CacheMessage, TileCache},
@@ -221,6 +221,10 @@ enum PanMove {
         velocity: Vector,
         last_time: Instant,
     },
+    AutoPan {
+        origin: iced::Point,
+        last_time: Instant,
+    },
 }
 
 #[derive(Default)]
@@ -248,6 +252,10 @@ enum ZoomMove {
         start_zoom: f64,
         end_zoom: f64,
         duration: Duration,
+    },
+    AutoZoom {
+        origin: iced::Point,
+        last_time: Instant,
     },
 }
 
@@ -305,7 +313,6 @@ where
         layout: iced_core::Layout<'_>,
         cursor: iced_core::mouse::Cursor,
         _renderer: &Renderer,
-        _clipboard: &mut dyn iced_core::Clipboard,
         shell: &mut iced_core::Shell<'_, Message>,
         _viewport: &iced::Rectangle,
     ) {
@@ -386,6 +393,55 @@ where
                         }
 
                         needs_redraw = true;
+                    }
+                    ZoomMove::AutoZoom { origin, last_time } => {
+                        let now = *at;
+                        let delta = (now - *last_time).as_secs_f64();
+                        *last_time = now;
+
+                        if let Some(cursor) = state.cursor {
+                            let offset = cursor - *origin;
+                            let distance = offset.y as f64; // Vertical distance determines speed
+
+                            if distance.abs() > 5.0 {
+                                // Scaling factor: 50 pixels = 1 zoom level per second
+                                // Up (negative distance) = Zoom In (positive velocity)
+                                let velocity = -distance / 50.0;
+                                let zoom_change = velocity * delta;
+
+                                self.viewpoint.zoom_on_center(zoom_change);
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+
+                if let PanMove::AutoPan { origin, last_time } = &mut state.pan_move {
+                    let now = *at;
+                    let delta = (now - *last_time).as_secs_f32();
+                    *last_time = now;
+
+                    if let Some(cursor) = state.cursor {
+                        let offset = cursor - *origin;
+                        let velocity = offset * 5.0;
+
+                        if velocity.x.abs() > 1.0 || velocity.y.abs() > 1.0 {
+                            let screen_delta = velocity * delta;
+
+                            let current_center = bounds.center();
+                            let target_screen = current_center + screen_delta;
+
+                            let center_mercator =
+                                projector.screen_space_into_mercator(current_center);
+                            let target_mercator =
+                                projector.screen_space_into_mercator(target_screen);
+
+                            self.viewpoint
+                                .position
+                                .add_sub(target_mercator, center_mercator);
+
+                            needs_redraw = true;
+                        }
                     }
                 }
 
@@ -487,14 +543,63 @@ where
                     needs_redraw = true;
                 }
                 iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
-                    if let Some(cursor_position) = cursor.position_over(projector.bounds) {
-                        state.pan_move = PanMove::Dragging {
-                            drag_mercator: projector.screen_space_into_mercator(cursor_position),
-                            last_cursor: cursor_position,
-                            last_time: Instant::now(),
-                            velocity: Vector::new(0.0, 0.0),
+                    match state.pan_move {
+                        PanMove::AutoPan { .. } => {
+                            state.pan_move = PanMove::Idle;
+                            shell.capture_event();
+                        }
+                        _ => {
+                            if let Some(cursor_position) = cursor.position_over(projector.bounds) {
+                                state.pan_move = PanMove::Dragging {
+                                    drag_mercator:
+                                        projector.screen_space_into_mercator(cursor_position),
+                                    last_cursor: cursor_position,
+                                    last_time: Instant::now(),
+                                    velocity: Vector::new(0.0, 0.0),
+                                }
+                            }
                         }
                     }
+
+                    match state.zoom_move {
+                        ZoomMove::AutoZoom { .. } => {
+                            state.zoom_move = ZoomMove::Idle;
+                            shell.capture_event();
+                        }
+                        _ => (),
+                    }
+                }
+                iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Middle) => {
+                    match state.zoom_move {
+                        ZoomMove::AutoZoom { .. } => {
+                            state.zoom_move = ZoomMove::Idle;
+                        }
+                        _ => {
+                            if let Some(cursor_position) = cursor.position_over(projector.bounds) {
+                                state.zoom_move = ZoomMove::AutoZoom {
+                                    origin: cursor_position,
+                                    last_time: Instant::now(),
+                                };
+                            }
+                        }
+                    }
+                    shell.capture_event();
+                }
+                iced::mouse::Event::ButtonPressed(iced_core::mouse::Button::Right) => {
+                    match state.pan_move {
+                        PanMove::AutoPan { .. } => {
+                            state.pan_move = PanMove::Idle;
+                        }
+                        _ => {
+                            if let Some(cursor_position) = cursor.position_over(projector.bounds) {
+                                state.pan_move = PanMove::AutoPan {
+                                    origin: cursor_position,
+                                    last_time: Instant::now(),
+                                };
+                            }
+                        }
+                    }
+                    shell.capture_event();
                 }
                 iced::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                     match state.pan_move {
@@ -521,6 +626,14 @@ where
                 }
                 iced::mouse::Event::CursorMoved { position } => {
                     state.cursor = Some(*position);
+
+                    if let PanMove::AutoPan { .. } = state.pan_move {
+                        needs_redraw = true;
+                    }
+
+                    if let ZoomMove::AutoZoom { .. } = state.zoom_move {
+                        needs_redraw = true;
+                    }
 
                     if let PanMove::Dragging {
                         drag_mercator,
@@ -660,34 +773,11 @@ where
         let state = WidgetState::get_ref(&tree.state)
             .expect("draw called prior to initializing widget state");
 
-        // Also do not snap while the map has momentum
-        let has_momentum = matches!(state.pan_move, PanMove::Momentum { .. });
-        let integer_zoom =
-            (self.viewpoint.zoom.f32().round() - self.viewpoint.zoom.f32()).abs() < f32::EPSILON;
-
-        let clip_bounds = layout.bounds();
-
         // Draw all tiles in order of zoom level (lowest first)
-        renderer.with_layer(clip_bounds, |renderer| {
+        renderer.with_layer(layout.bounds(), |renderer| {
             for data in state.draw_cache.iter_tiles() {
-                let img_bounds = if !has_momentum && integer_zoom {
-                    // This is different than just rounding (or round_ties_even)
-                    // since this will always round up at .5, both for negative and
-                    // positive numbers. This fixes some weirdness when the layout
-                    // bounds are not a whole number, and some tiles have x/y coordinates
-                    // in the negatives.
-                    Rectangle {
-                        x: data.rectangle.x.round_ceil(),
-                        y: data.rectangle.y.round_ceil(),
-                        width: data.rectangle.width,
-                        height: data.rectangle.height,
-                    }
-                } else {
-                    data.rectangle
-                };
-
                 let image = Image::new(&data.handle).filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, img_bounds, clip_bounds)
+                renderer.draw_image(image, data.rectangle, layout.bounds())
             }
         });
     }
@@ -708,11 +798,13 @@ where
         // The dragging pan move takes precedent
         match state.pan_move {
             PanMove::Dragging { .. } => return Interaction::Grabbing,
+            PanMove::AutoPan { .. } => return Interaction::Crosshair,
             _ => (),
         };
 
         // Then zooming should have the appropriate cursor
         match state.zoom_move {
+            ZoomMove::AutoZoom { .. } => return Interaction::ResizingVertically,
             ZoomMove::Discrete {
                 start_zoom,
                 end_zoom,

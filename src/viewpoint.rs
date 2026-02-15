@@ -1,6 +1,6 @@
 use iced::{Point, Rectangle, Vector};
 
-use crate::{Geographic, Mercator, Zoom};
+use crate::{Geodetic, Mercator, Zoom};
 
 /// The viewpoint of the [`MapWidget`] consists of a coordinate of
 /// the center of the viewport, and a zoom level.
@@ -17,9 +17,9 @@ impl Viewpoint {
         self.position = mercator;
     }
 
-    /// Move the viewpoint to a different location defined by the a [`Geographic`] coordinate
-    pub fn move_to_geographic(&mut self, geographic: Geographic) {
-        self.position = geographic.as_mercator();
+    /// Move the viewpoint to a different location defined by the a [`Geodetic`] coordinate
+    pub fn move_to_geodetic(&mut self, geodetic: Geodetic) {
+        self.position = geodetic.as_mercator();
     }
 
     /// Get the viewpoint position in the pixel space representation

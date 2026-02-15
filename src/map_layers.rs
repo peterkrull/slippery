@@ -1,5 +1,5 @@
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, alignment};
-use iced_core::{self, Clipboard, Layout, Shell, Widget, mouse, overlay, renderer, widget::tree};
+use iced_core::{Layout, Shell, Widget, mouse, overlay, renderer, widget::tree};
 
 use crate::{GlobalElement, Projector, Viewpoint};
 
@@ -72,7 +72,7 @@ where
             let child_size = child_node.size();
             let position = child.position;
 
-            // Project geographical position to relative screen coordinates
+            // Project geodetical position to relative screen coordinates
             let screen_pos = projector.mercator_into_screen_space(position);
 
             let x = match child.horizontal_alignment {
@@ -124,7 +124,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -144,7 +143,6 @@ where
                 child_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -161,7 +159,6 @@ where
             base_layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -237,15 +234,17 @@ where
                 let child_tree = &tree.children[i + 1];
                 let child_layout = children_layout.next().unwrap();
 
-                child.element.as_widget().draw(
-                    child_tree,
-                    renderer,
-                    theme,
-                    style,
-                    child_layout,
-                    cursor,
-                    viewport,
-                );
+                if child_layout.bounds().intersects(viewport) {
+                    child.element.as_widget().draw(
+                        child_tree,
+                        renderer,
+                        theme,
+                        style,
+                        child_layout,
+                        cursor,
+                        viewport,
+                    );
+                }
             }
         });
     }

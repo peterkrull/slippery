@@ -4,7 +4,7 @@ A slippy map widget for the Iced toolkit.
 ## Features
 - Automatically fetch visible tiles from a web source
 - Smooth zooming and panning with momentum
-- Attach widgets to specific a geographical coordinates
+- Attach widgets to specific a geodetical coordinates
 
 ## Example
 

@@ -1,10 +1,11 @@
 use iced::{
     Border, Color, Element, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
-    widget::{button, column, container, row, text},
+    widget::{button, column, container, text},
 };
+use iced::widget::image;
 use slippery::{
-    Action, CacheMessage, Geographic, GlobalElement, MapProgram, Mercator, Projector, TileCache, Viewpoint, Zoom, location, sources::OpenStreetMap
+    Action, CacheMessage, Geodetic, GlobalElement, MapProgram, Mercator, Projector, TileCache, Viewpoint, Zoom, location, sources::OpenStreetMap
 };
 
 fn main() {
@@ -22,11 +23,15 @@ struct PointData {
 
 struct StressTest {
     cache: TileCache,
+    point_handle_red: image::Handle,
+    point_handle_blue: image::Handle,
     viewpoint: Viewpoint,
     points: Vec<PointData>,
-    dragged_point: Option<usize>, // ID of the point being dragged
+    dragged_point: Option<usize>,
     drag_start: Option<iced::Point>,
 }
+
+const RADIUS: f32 = 5.0;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -47,13 +52,13 @@ impl StressTest {
         let center = location::paris();
         let mut points = Vec::new();
 
-        // Create 50 initial points around Paris
+        // Create initial points around Paris
         let mut index = 0;
-        for lat_offs in -10..=10 {
-            for lon_offs in -10..=10 {
+        for lat_offs in -500..=500 {
+            for lon_offs in -500..=500 {
                 points.push(PointData {
                     id: index,
-                    position: Geographic::new(
+                    position: Geodetic::new(
                         center.longitude() + lon_offs as f64 / 60.0,
                         center.latitude() + lat_offs as f64 / 100.0,
                     ).as_mercator(),
@@ -66,6 +71,8 @@ impl StressTest {
         (
             Self {
                 cache: TileCache::new(OpenStreetMap),
+                point_handle_red: create_circle_handle(Color::from_rgb(0.8, 0.2, 0.2)),
+                point_handle_blue: create_circle_handle(Color::from_rgb(0.2, 0.4, 0.8)),
                 viewpoint: Viewpoint {
                     position: center.as_mercator(),
                     zoom: Zoom::try_from(12.0).unwrap(),
@@ -137,24 +144,30 @@ impl StressTest {
                     .map(|p| (p.position, p.is_popup_open, p.id))
                     .collect();
 
+                let handle_red = self.point_handle_red.clone();
+                let handle_blue = self.point_handle_blue.clone();
+
                 move |projector, frame| {
                     for (pos, is_open, _id) in &points {
                         let screen_pos = projector.mercator_into_screen_space(*pos);
 
-                        let color = if *is_open {
-                            Color::from_rgb(0.8, 0.2, 0.2)
+                        // Skip adding the point to the frame if it is out of bounds
+                        if !projector.bounds.expand(RADIUS * 2.0).contains(screen_pos) {
+                            continue;
+                        }
+
+                        let handle = if *is_open {
+                            handle_red.clone()
                         } else {
-                            Color::from_rgb(0.2, 0.4, 0.8)
+                            handle_blue.clone()
                         };
 
-                        let circle = iced::widget::canvas::Path::circle(screen_pos, 8.0);
-                        frame.fill(&circle, color);
-                        frame.stroke(
-                            &circle,
-                            iced::widget::canvas::Stroke::default()
-                                .with_color(Color::WHITE)
-                                .with_width(2.0),
+                        let image = iced::widget::canvas::Image::new(handle);
+                        let bounds = iced::Rectangle::new(
+                            screen_pos - Vector::new(RADIUS, RADIUS),
+                            iced::Size::new(RADIUS * 2.0, RADIUS * 2.0)
                         );
+                        frame.draw_image(bounds, image);
                     }
                 }
             })
@@ -242,4 +255,34 @@ impl StressTest {
 
         map.into()
     }
+}
+
+fn create_circle_handle(color: Color) -> image::Handle {
+    let size = RADIUS as u32 * 2;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - RADIUS;
+            let dy = y as f32 - RADIUS;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            let alpha = if dist < RADIUS - 1.0 {
+                1.0
+            } else if dist < RADIUS {
+                RADIUS - dist
+            } else {
+                0.0
+            };
+
+            let r = (color.r * 255.0) as u8;
+            let g = (color.g * 255.0) as u8;
+            let b = (color.b * 255.0) as u8;
+            let a = (color.a * alpha * 255.0) as u8;
+
+            pixels.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+
+    image::Handle::from_rgba(size, size, pixels)
 }

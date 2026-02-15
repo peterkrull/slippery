@@ -1,3 +1,6 @@
+//! The draw cache is used to store which tiles should be drawn and where.
+//! It also holds on to the GPU-allocated image handle between draw calls.
+
 use std::collections::HashMap;
 
 use iced::Rectangle;
@@ -57,7 +60,7 @@ impl DrawCache {
     ) {
         self.maps
             .entry(tile_id.zoom())
-            .or_insert_with(|| HashMap::with_capacity(25))
+            .or_insert_with(HashMap::default)
             .insert(
                 tile_id.x_y(),
                 DrawData {
@@ -70,9 +73,12 @@ impl DrawCache {
 
     /// Iterate through all tiles in ascending zoom order
     pub fn iter_tiles(&self) -> impl Iterator<Item = &DrawData> {
+
+        // Get a sorted vector of the zoom levels
         let mut zooms: Vec<&u8> = self.maps.keys().collect();
         zooms.sort();
 
+        // Iterate over the maps in order of zoom level and yield the draw data. 
         zooms.into_iter().flat_map(|zoom| {
             let map = &self.maps[zoom];
             map.iter().map(move |(_, data)| data)

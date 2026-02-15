@@ -1,7 +1,7 @@
 use crate::Mercator;
 use iced::{Element, alignment};
 
-/// Like a regular [`Element`] but tied to a specific [`Geographic`] coordinate
+/// Like a regular [`Element`] but tied to a specific [`Geodetic`] coordinate
 pub struct GlobalElement<'a, Message, Theme, Renderer> {
     pub element: Element<'a, Message, Theme, Renderer>,
     pub position: Mercator,

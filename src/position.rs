@@ -11,8 +11,7 @@ pub(crate) fn total_tiles(zoom: u8) -> u32 {
 }
 
 /// A position on the 2D mercator map projection.
-/// Values range from `[-1 .. =1]` in both
-/// x (east positive) and y (north positive) directions
+/// Values range from `[-1 .. =1]` in both x (east) and y (south) directions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mercator {
     x: f64,
@@ -27,8 +26,8 @@ impl Mercator {
         }
     }
 
-    pub fn as_geographic(&self) -> Geographic {
-        Geographic::new(
+    pub fn as_geodetic(&self) -> Geodetic {
+        Geodetic::new(
             (self.x * PI).to_degrees(),
             -(self.y * PI).sinh().atan().to_degrees(),
         )
@@ -77,16 +76,15 @@ impl Mercator {
     }
 }
 
-/// A position on a sphere consisting of longitude
-/// and latitude components, ranging from `[-180 .. =180]`
-/// and `[-90 .. =90]` respectively.
+/// A position on a sphere consisting of longitude and latitude components,
+/// ranging from `[-180 .. =180]`  and `[-85.05 .. =85.05]` respectively.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Geographic {
+pub struct Geodetic {
     lon: f64,
     lat: f64,
 }
 
-impl Geographic {
+impl Geodetic {
     pub const fn new(lon: f64, lat: f64) -> Self {
         Self {
             lon: lon.clamp(-180., 180.),
@@ -110,7 +108,7 @@ impl Geographic {
     }
 
     pub fn from_pixel_space(point: iced::Point<f64>, zoom: f64) -> Self {
-        Mercator::from_pixel_space(point, zoom).as_geographic()
+        Mercator::from_pixel_space(point, zoom).as_geodetic()
     }
 
     pub fn into_pixel_space(&self, zoom: f64) -> iced::Point<f64> {
@@ -119,30 +117,30 @@ impl Geographic {
 }
 
 pub mod location {
-    use super::Geographic;
+    use super::Geodetic;
 
-    pub const fn paris() -> Geographic {
-        Geographic::new(2.35, 48.86)
+    pub const fn paris() -> Geodetic {
+        Geodetic::new(2.35, 48.86)
     }
 
-    pub const fn london() -> Geographic {
-        Geographic::new(-0.13, 51.51)
+    pub const fn london() -> Geodetic {
+        Geodetic::new(-0.13, 51.51)
     }
 
-    pub const fn berlin() -> Geographic {
-        Geographic::new(13.39, 52.52)
+    pub const fn berlin() -> Geodetic {
+        Geodetic::new(13.39, 52.52)
     }
 
-    pub const fn rome() -> Geographic {
-        Geographic::new(12.50, 41.90)
+    pub const fn rome() -> Geodetic {
+        Geodetic::new(12.50, 41.90)
     }
 
-    pub const fn madrid() -> Geographic {
-        Geographic::new(-3.70, 40.42)
+    pub const fn madrid() -> Geodetic {
+        Geodetic::new(-3.70, 40.42)
     }
 
-    pub const fn vienna() -> Geographic {
-        Geographic::new(16.38, 48.21)
+    pub const fn vienna() -> Geodetic {
+        Geodetic::new(16.38, 48.21)
     }
 }
 
@@ -151,23 +149,23 @@ mod position_tests {
     use super::*;
 
     #[test]
-    fn mercator_to_geographic2() {
+    fn mercator_to_geodetic2() {
         assert_eq!(
-            Geographic::new(0.0, 0.0).as_mercator(),
+            Geodetic::new(0.0, 0.0).as_mercator(),
             Mercator::new(0.0, 0.0)
         );
         assert_eq!(
-            Geographic::new(0.0, 0.0),
-            Mercator::new(0.0, 0.0).as_geographic()
+            Geodetic::new(0.0, 0.0),
+            Mercator::new(0.0, 0.0).as_geodetic()
         );
 
         approx::assert_relative_eq!(
-            Geographic::new(90.0, 0.0).as_mercator().east_x(),
+            Geodetic::new(90.0, 0.0).as_mercator().east_x(),
             Mercator::new(0.5, 0.0).east_x()
         );
 
         approx::assert_relative_eq!(
-            Geographic::new(-180.0, 0.0).as_mercator().east_x(),
+            Geodetic::new(-180.0, 0.0).as_mercator().east_x(),
             Mercator::new(-1.0, 0.0).east_x(),
         );
     }

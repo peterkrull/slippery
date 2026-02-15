@@ -1,11 +1,11 @@
 use iced::{Point, Rectangle, Vector};
 
-use crate::{Geographic, Mercator, RoundCeil, Viewpoint};
+use crate::{Geodetic, Mercator, Viewpoint};
 
 /// Utility for projecting between points in screen space, pixel space or global coordinates.
 ///
-/// Note, most methods for this use the [`Mercator`] projection. Any [`Geographic`](`crate::position::Geographic`) coordinate
-/// can easily be converted into its mercator counterpart with the [`Geographic::as_mercator`](`crate::position::Geographic::as_mercator`)
+/// Note, most methods for this use the [`Mercator`] projection. Any [`Geodetic`](`crate::position::Geodetic`) coordinate
+/// can easily be converted into its mercator counterpart with the [`Geodetic::as_mercator`](`crate::position::Geodetic::as_mercator`)
 /// function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Projector {
@@ -28,11 +28,11 @@ impl Projector {
     }
 
     /// Project the [`Mercator`] position into the pixel space. This can be used
-    /// to calculate distances in on-screen pixels between geographical coordinates.
+    /// to calculate distances in on-screen pixels between geodetical coordinates.
     ///
     /// This is distinctly different from [`Projector::mercator_into_screen_space`]
-    pub fn mercator_into_pixel_space(&self, position: Mercator) -> Point<f64> {
-        Mercator::into_pixel_space(&position, self.viewpoint.zoom.f64())
+    pub fn mercator_into_pixel_space(&self, mercator: Mercator) -> Point<f64> {
+        Mercator::into_pixel_space(&mercator, self.viewpoint.zoom.f64())
     }
 
     /// Determine the [`Mercator`] position of some point in pixel space. Note, this
@@ -50,9 +50,9 @@ impl Projector {
     /// This is distinctly different from [`Projector::mercator_into_pixel_space`].
     ///
     /// The returned [`Point`] may not be within screen bounds
-    pub fn mercator_into_screen_space(&self, position: Mercator) -> Point<f32> {
-        let position_pixel_space = self.mercator_into_pixel_space(position);
-        self.pixel_space_into_screen_space(position_pixel_space)
+    pub fn mercator_into_screen_space(&self, mercator: Mercator) -> Point<f32> {
+        let point_pixel_space = self.mercator_into_pixel_space(mercator);
+        self.pixel_space_into_screen_space(point_pixel_space)
     }
 
     /// Determines the [`Mercator`] coordinate of a point in screen-space coordinates.
@@ -75,7 +75,7 @@ impl Projector {
     /// One unit is always the same in both, but a higher precision is required
     /// when dealing with the larger relative distances in pixel space.
     pub fn screen_space_into_pixel_space(&self, point: Point<f32>) -> Point<f64> {
-        let center_pixel_space = self.viewpoint.into_pixel_space().round_ceil();
+        let center_pixel_space = self.viewpoint.into_pixel_space();
 
         let point_offset = point - self.bounds.center();
         let point_offset = Vector::new(point_offset.x as f64, point_offset.y as f64);
@@ -91,7 +91,7 @@ impl Projector {
     /// One unit is always the same in both, but a higher precision is required
     /// when dealing with the larger relative distances in pixel space.
     pub fn pixel_space_into_screen_space(&self, point: Point<f64>) -> Point<f32> {
-        let center_pixel_space = self.viewpoint.into_pixel_space().round_ceil();
+        let center_pixel_space = self.viewpoint.into_pixel_space();
 
         let position_offset = point - center_pixel_space;
         let position_offset = Vector::new(position_offset.x as f32, position_offset.y as f32);
@@ -99,16 +99,16 @@ impl Projector {
         self.bounds.center() + position_offset
     }
 
-    /// Convenience method to convert a [`Geographic`] coordinate directly
+    /// Convenience method to convert a [`Geodetic`] coordinate directly
     /// to screen space without manually converting to Mercator first.
-    pub fn geographic_into_screen_space(&self, position: Geographic) -> Point<f32> {
-        self.mercator_into_screen_space(position.as_mercator())
+    pub fn geodetic_into_screen_space(&self, geodetic: Geodetic) -> Point<f32> {
+        self.mercator_into_screen_space(geodetic.as_mercator())
     }
 
     /// Convenience method to convert a screen space coordinate directly
-    /// to [`Geographic`] without manually converting to Mercator first.
-    pub fn screen_space_into_geographic(&self, point: Point<f32>) -> Geographic {
-        self.screen_space_into_mercator(point).as_geographic()
+    /// to [`Geodetic`] without manually converting to Mercator first.
+    pub fn screen_space_into_geodetic(&self, point: Point<f32>) -> Geodetic {
+        self.screen_space_into_mercator(point).as_geodetic()
     }
 }
 
@@ -136,11 +136,11 @@ mod tests {
 
         let original_point = Point::new(500.0, 300.0);
 
-        let geographic_first = projector.screen_space_into_mercator(original_point);
-        let projected_point = projector.mercator_into_screen_space(geographic_first);
-        let geographic_second = projector.screen_space_into_mercator(projected_point);
+        let geodetic_first = projector.screen_space_into_mercator(original_point);
+        let projected_point = projector.mercator_into_screen_space(geodetic_first);
+        let geodetic_second = projector.screen_space_into_mercator(projected_point);
 
         assert_eq!(original_point, projected_point);
-        assert_eq!(geographic_first, geographic_second);
+        assert_eq!(geodetic_first, geodetic_second);
     }
 }

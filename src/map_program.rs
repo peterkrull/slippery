@@ -43,7 +43,7 @@ pub enum Action<Message> {
 /// MapProgram::new(&tile_cache)
 ///     .on_cache(Message::Cache)
 ///     .with_draw_layer(|ctx, frame| {
-///         let pos = ctx.to_screen(Geographic::new(48.8566, 2.3522));
+///         let pos = ctx.to_screen(Geodetic::new(48.8566, 2.3522));
 ///         frame.fill(&canvas::Path::circle(pos, 10.0), Color::RED);
 ///     })
 ///     .build(viewpoint)
@@ -63,7 +63,7 @@ pub struct MapProgram<'a, Message> {
     // User interaction layer
     interact_layer: Option<Box<dyn Fn(&Projector, &canvas::Event) -> Action<Message> + 'a>>,
 
-    // GlobalElements (markers, widgets at geographic positions)
+    // GlobalElements (markers, widgets at geodetic positions)
     children: Vec<GlobalElement<'a, Message, iced::Theme, iced::Renderer>>,
 }
 
@@ -110,7 +110,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     ///
     /// ```ignore
     /// .with_draw_layer(|projector, frame| {
-    ///     let pos = projector.geographic_into_screen_space(Geographic::new(48.8566, 2.3522));
+    ///     let pos = projector.geodetic_into_screen_space(Geodetic::new(48.8566, 2.3522));
     ///     frame.fill(&canvas::Path::circle(pos, 10.0), Color::RED);
     /// })
     /// ```
@@ -133,7 +133,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     ///     if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event {
     ///         if let Some(cursor) = projector.cursor {
     ///             let mercator = projector.mercator_from_screen_space(cursor);
-    ///             return MapInteraction::Capture(Message::Clicked(mercator.as_geographic()));
+    ///             return MapInteraction::Capture(Message::Clicked(mercator.as_geodetic()));
     ///         }
     ///     }
     ///     MapInteraction::None  // Pass through to MapWidget for panning
@@ -147,14 +147,14 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
         self
     }
 
-    /// Add globally positioned elements (markers, widgets at geographic coordinates).
+    /// Add globally positioned elements (markers, widgets at geodetic coordinates).
     ///
     /// # Example
     ///
     /// ```ignore
     /// .with_children(vec![
     ///     GlobalElement {
-    ///         position: Geographic::new(2.3522, 48.8566),
+    ///         position: Geodetic::new(2.3522, 48.8566),
     ///         element: Button::new("Paris").into(),
     ///     }
     /// ])

@@ -3,7 +3,7 @@ use iced::{
     widget::{button, column, container, text},
 };
 use slippery::{
-    Action, CacheMessage, Geographic, GlobalElement, MapProgram, Projector, TileCache, Viewpoint,
+    Action, CacheMessage, Geodetic, GlobalElement, MapProgram, Projector, TileCache, Viewpoint,
     Zoom, location, sources::OpenStreetMap,
 };
 
@@ -17,7 +17,7 @@ fn main() {
 struct PopupExample {
     cache: TileCache,
     viewpoint: Viewpoint,
-    point_position: Geographic,
+    point_position: Geodetic,
     is_dragging: bool,
     is_popup_open: bool,
     drag_start: Option<iced::Point>,
@@ -28,7 +28,7 @@ enum Message {
     Cache(CacheMessage),
     Projector(Projector),
     DragStart(iced::Point),
-    DragMove(Geographic),
+    DragMove(Geodetic),
     DragEnd(iced::Point),
     ClosePopup,
 }
@@ -101,7 +101,7 @@ impl PopupExample {
             .on_cache(Message::Cache)
             .on_update(Message::Projector)
             .with_draw_layer(move |projector, frame| {
-                let screen_pos = projector.geographic_into_screen_space(point_position);
+                let screen_pos = projector.geodetic_into_screen_space(point_position);
 
                 // Draw a nice circle
                 let circle = iced::widget::canvas::Path::circle(screen_pos, 10.0);
@@ -122,7 +122,7 @@ impl PopupExample {
                 } else {
                     return Action::None;
                 };
-                let screen_pos = projector.geographic_into_screen_space(point_position);
+                let screen_pos = projector.geodetic_into_screen_space(point_position);
                 let distance_to_point = screen_pos.distance(cursor);
                 let is_hovering = distance_to_point < 15.0; // slightly larger hit area
 
@@ -134,9 +134,9 @@ impl PopupExample {
                     }
                     Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                         if is_dragging {
-                            // Convert screen cursor to Geographic to move the point
+                            // Convert screen cursor to Geodetic to move the point
                             let mercator = projector.screen_space_into_mercator(cursor);
-                            return Action::Capture(Message::DragMove(mercator.as_geographic()));
+                            return Action::Capture(Message::DragMove(mercator.as_geodetic()));
                         }
                     }
                     Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {

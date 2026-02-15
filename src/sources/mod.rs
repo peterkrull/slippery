@@ -1,18 +1,21 @@
 //! Some common HTTP tile sources. Make sure you follow terms of usage of the particular source.
 
+use iced_core::image::Image;
+
 mod arcgis;
 mod carto;
 mod geoportal;
 mod mapbox;
 mod openstreetmap;
+mod stadia;
 
 use crate::tile_coord::TileCoord;
 pub use arcgis::ArcGisWorldMap;
 pub use carto::*;
 pub use geoportal::Geoportal;
-use iced_core::image::Image;
 pub use mapbox::{Mapbox, MapboxStyle};
 pub use openstreetmap::OpenStreetMap;
+pub use stadia::StadiaBright;
 
 #[derive(Clone)]
 pub struct Attribution {

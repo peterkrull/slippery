@@ -1,7 +1,8 @@
 use iced::widget::canvas::{Path, Stroke};
 use iced::{self, Color, Element, Task};
+use slippery::location;
 use slippery::{
-    CacheMessage, Geographic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
+    CacheMessage, Geodetic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
     sources::OpenStreetMap,
 };
 
@@ -28,13 +29,6 @@ struct Application {
     viewpoint: Viewpoint,
 }
 
-const PARIS: Geographic = Geographic::new(2.3522, 48.8566);
-const LONDON: Geographic = Geographic::new(-0.1278, 51.5074);
-const BERLIN: Geographic = Geographic::new(13.4050, 52.5200);
-const ROME: Geographic = Geographic::new(12.4964, 41.9028);
-const MADRID: Geographic = Geographic::new(-3.7038, 40.4168);
-const VIENNA: Geographic = Geographic::new(16.3738, 48.2082);
-
 impl Application {
     pub fn boot() -> (Self, Task<Message>) {
         (
@@ -42,7 +36,7 @@ impl Application {
                 cache: TileCache::new(OpenStreetMap),
                 viewpoint: Viewpoint {
                     // Start view centered on Europe
-                    position: Geographic::new(10.0, 50.0).as_mercator(),
+                    position: Geodetic::new(10.0, 50.0).as_mercator(),
                     zoom: Zoom::try_from(4.0).unwrap(),
                 },
             },
@@ -71,8 +65,8 @@ impl Application {
             .on_update(Message::Projector)
             .with_draw_layer(|projector, frame| {
                 // Line connecting Paris and London
-                let p1 = projector.geographic_into_screen_space(PARIS);
-                let p2 = projector.geographic_into_screen_space(LONDON);
+                let p1 = projector.geodetic_into_screen_space(location::paris());
+                let p2 = projector.geodetic_into_screen_space(location::london());
 
                 let line = Path::line(p1, p2);
                 let stroke = Stroke::default()
@@ -81,9 +75,9 @@ impl Application {
                 frame.stroke(&line, stroke);
 
                 // Triangle filling the area between Berlin, Paris and Rome
-                let p1 = projector.geographic_into_screen_space(BERLIN);
-                let p2 = projector.geographic_into_screen_space(PARIS);
-                let p3 = projector.geographic_into_screen_space(ROME);
+                let p1 = projector.geodetic_into_screen_space(location::berlin());
+                let p2 = projector.geodetic_into_screen_space(location::paris());
+                let p3 = projector.geodetic_into_screen_space(location::rome());
 
                 let triangle = Path::new(|builder| {
                     builder.move_to(p1);
@@ -100,30 +94,30 @@ impl Application {
                 frame.stroke(&triangle, poly_stroke);
 
                 // Draw a bezier curve between Madrid and Vienna
-                let start = MADRID;
-                let end = VIENNA;
+                let start = location::madrid();
+                let end = location::vienna();
 
-                // Calculate midpoint in geographic coordinates
+                // Calculate midpoint in geodetic coordinates
                 let mid_lat = (start.latitude() + end.latitude()) / 2.0;
                 let mid_lon = (start.longitude() + end.longitude()) / 2.0;
 
                 // Create control points offset from the midpoint
                 let lat_offset = (end.latitude() - start.latitude()).abs() * 0.5;
 
-                let control1_geo = Geographic::new(
+                let control1_geo = Geodetic::new(
                     start.longitude() + (mid_lon - start.longitude()) * 0.5,
                     start.latitude() + (mid_lat - start.latitude()) * 0.5 + lat_offset,
                 );
-                let control2_geo = Geographic::new(
+                let control2_geo = Geodetic::new(
                     end.longitude() - (end.longitude() - mid_lon) * 0.5,
                     end.latitude() - (end.latitude() - mid_lat) * 0.5 - lat_offset,
                 );
 
                 // Convert all points to screen space
-                let p_start = projector.geographic_into_screen_space(start);
-                let p_end = projector.geographic_into_screen_space(end);
-                let p_control1 = projector.geographic_into_screen_space(control1_geo);
-                let p_control2 = projector.geographic_into_screen_space(control2_geo);
+                let p_start = projector.geodetic_into_screen_space(start);
+                let p_end = projector.geodetic_into_screen_space(end);
+                let p_control1 = projector.geodetic_into_screen_space(control1_geo);
+                let p_control2 = projector.geodetic_into_screen_space(control2_geo);
 
                 let curve = Path::new(|builder| {
                     builder.move_to(p_start);
@@ -136,10 +130,10 @@ impl Application {
                 frame.stroke(&curve, curve_stroke);
 
                 // Draw circles at major European cities
-                let cities = vec![PARIS, LONDON, BERLIN, ROME, MADRID, VIENNA];
+                let cities = vec![location::paris(), location::london(), location::berlin(), location::rome(), location::madrid(), location::vienna()];
 
                 for city in cities {
-                    let pos = projector.geographic_into_screen_space(city);
+                    let pos = projector.geodetic_into_screen_space(city);
                     let circle = Path::circle(pos, 8.0);
                     frame.fill(&circle, Color::from_rgb(0.0, 0.5, 1.0));
 
