@@ -73,12 +73,11 @@ impl DrawCache {
 
     /// Iterate through all tiles in ascending zoom order
     pub fn iter_tiles(&self) -> impl Iterator<Item = &DrawData> {
-
         // Get a sorted vector of the zoom levels
         let mut zooms: Vec<&u8> = self.maps.keys().collect();
         zooms.sort();
 
-        // Iterate over the maps in order of zoom level and yield the draw data. 
+        // Iterate over the maps in order of zoom level and yield the draw data.
         zooms.into_iter().flat_map(|zoom| {
             let map = &self.maps[zoom];
             map.iter().map(move |(_, data)| data)

@@ -10,23 +10,10 @@ use crate::{Geodetic, Mercator, Viewpoint};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Projector {
     pub viewpoint: Viewpoint,
-    pub cursor: Option<Point>,
     pub bounds: Rectangle,
 }
 
 impl Projector {
-    /// Get the pixel-space coordinate under the cursor.
-    pub fn cursor_into_pixel_space(&self) -> Option<Point<f64>> {
-        let cursor = self.cursor?;
-        Some(self.screen_space_into_pixel_space(cursor))
-    }
-
-    /// Get the [`Mercator`] coordinate under the cursor.
-    pub fn cursor_into_mercator(&self) -> Option<Mercator> {
-        let cursor = self.cursor?;
-        Some(self.screen_space_into_mercator(cursor))
-    }
-
     /// Project the [`Mercator`] position into the pixel space. This can be used
     /// to calculate distances in on-screen pixels between geodetical coordinates.
     ///
@@ -125,7 +112,6 @@ mod tests {
                 position: Mercator::new(0.25, -0.33),
                 zoom: Zoom::try_from(10.0).unwrap(),
             },
-            cursor: Default::default(),
             bounds: Rectangle {
                 x: 0.0,
                 y: 0.0,

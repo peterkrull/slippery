@@ -54,7 +54,6 @@ where
 
         let projector = Projector {
             viewpoint: self.viewpoint,
-            cursor: None,
             bounds,
         };
 

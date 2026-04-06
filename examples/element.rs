@@ -1,5 +1,6 @@
 use iced::{
     Border, Color, Element, Shadow, Task, Vector, alignment,
+    mouse::Cursor,
     widget::{button, column, container, text},
 };
 use slippery::{
@@ -113,12 +114,12 @@ impl PopupExample {
                         .with_width(2.0),
                 );
             })
-            .with_interaction(move |projector, event| {
+            .with_interaction(move |projector, cursor, event| {
                 use iced::mouse;
                 use iced::widget::canvas::Event;
 
-                let cursor = if let Some(c) = projector.cursor {
-                    c
+                let cursor = if let Cursor::Available(c) = cursor {
+                    *c
                 } else {
                     return Action::None;
                 };

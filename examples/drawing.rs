@@ -130,7 +130,14 @@ impl Application {
                 frame.stroke(&curve, curve_stroke);
 
                 // Draw circles at major European cities
-                let cities = vec![location::paris(), location::london(), location::berlin(), location::rome(), location::madrid(), location::vienna()];
+                let cities = vec![
+                    location::paris(),
+                    location::london(),
+                    location::berlin(),
+                    location::rome(),
+                    location::madrid(),
+                    location::vienna(),
+                ];
 
                 for city in cities {
                     let pos = projector.geodetic_into_screen_space(city);

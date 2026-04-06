@@ -61,7 +61,7 @@ impl Mercator {
             add.south_y() - sub.south_y() + self.south_y(),
         );
     }
-    
+
     /// Get the tile at this position for the given zoom.
     pub(crate) fn tile_id(&self, zoom: u8) -> TileCoord {
         let x = (self.east_x() + 1.0) / 2.0;

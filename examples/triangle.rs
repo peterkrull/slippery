@@ -1,4 +1,4 @@
-use iced::mouse;
+use iced::mouse::{self, Cursor};
 use iced::widget::canvas::{self, Path, Stroke};
 use iced::{self, Color, Element, Task};
 use slippery::{
@@ -141,14 +141,14 @@ impl Application {
                     );
                 }
             })
-            .with_interaction(move |projector, event| {
+            .with_interaction(move |projector, cursor, event| {
                 use slippery::Action;
                 match event {
                     canvas::Event::Mouse(mouse_event) => {
                         match mouse_event {
                             mouse::Event::CursorMoved { .. } => {
-                                let cursor_pos = if let Some(p) = projector.cursor {
-                                    p
+                                let cursor_pos = if let Cursor::Available(p) = cursor {
+                                    *p
                                 } else {
                                     return Action::None;
                                 };
@@ -164,8 +164,7 @@ impl Application {
                                 // Handling Hover
                                 // Check if cursor is over any vertex
                                 for (i, vertex) in vertices_interact.iter().enumerate() {
-                                    let screen_pos =
-                                        projector.geodetic_into_screen_space(*vertex);
+                                    let screen_pos = projector.geodetic_into_screen_space(*vertex);
                                     if screen_pos.distance(cursor_pos) < 10.0 {
                                         if hovered_vertex != Some(i) {
                                             return Action::Publish(Message::HoverVertex(Some(i)));

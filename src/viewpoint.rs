@@ -11,7 +11,6 @@ pub struct Viewpoint {
 }
 
 impl Viewpoint {
-
     /// Move the viewpoint to a different location defined by the a [`Mercator`] coordinate
     pub fn move_to_mercator(&mut self, mercator: Mercator) {
         self.position = mercator;

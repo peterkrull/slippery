@@ -61,7 +61,8 @@ pub struct MapProgram<'a, Message> {
     draw_layer: Option<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
 
     // User interaction layer
-    interact_layer: Option<Box<dyn Fn(&Projector, &canvas::Event) -> Action<Message> + 'a>>,
+    interact_layer:
+        Option<Box<dyn Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a>>,
 
     // GlobalElements (markers, widgets at geodetic positions)
     children: Vec<GlobalElement<'a, Message, iced::Theme, iced::Renderer>>,
@@ -141,7 +142,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     /// ```
     pub fn with_interaction<F>(mut self, f: F) -> Self
     where
-        F: Fn(&Projector, &canvas::Event) -> Action<Message> + 'a,
+        F: Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a,
     {
         self.interact_layer = Some(Box::new(f));
         self
@@ -208,7 +209,8 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
 
 struct OverlayProgram<'a, Message> {
     draw_fn: Option<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
-    interact_fn: Option<Box<dyn Fn(&Projector, &canvas::Event) -> Action<Message> + 'a>>,
+    interact_fn:
+        Option<Box<dyn Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a>>,
     viewpoint: Viewpoint,
 }
 
@@ -225,11 +227,10 @@ impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message
         if let Some(ref interact_fn) = self.interact_fn {
             let projector = Projector {
                 viewpoint: self.viewpoint,
-                cursor: cursor.position_over(bounds),
                 bounds,
             };
 
-            match interact_fn(&projector, event) {
+            match interact_fn(&projector, &cursor, event) {
                 Action::None => None,
                 Action::Publish(msg) => Some(canvas::Action::publish(msg)),
                 Action::Capture(msg) => Some(canvas::Action::publish(msg).and_capture()),
@@ -245,12 +246,11 @@ impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message
         renderer: &iced::Renderer,
         _theme: &iced::Theme,
         bounds: Rectangle,
-        cursor: mouse::Cursor,
+        _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         if let Some(ref draw_fn) = self.draw_fn {
             let projector = Projector {
                 viewpoint: self.viewpoint,
-                cursor: cursor.position_over(bounds),
                 bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
             };
 

@@ -28,5 +28,3 @@ impl super::Source for StadiaBright {
         256
     }
 }
-
-

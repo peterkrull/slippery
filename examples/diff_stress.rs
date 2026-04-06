@@ -1,11 +1,13 @@
+use iced::widget::image;
 use iced::{
     Border, Color, Element, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
+    mouse::Cursor,
     widget::{button, column, container, text},
 };
-use iced::widget::image;
 use slippery::{
-    Action, CacheMessage, Geodetic, GlobalElement, MapProgram, Mercator, Projector, TileCache, Viewpoint, Zoom, location, sources::OpenStreetMap
+    Action, CacheMessage, Geodetic, GlobalElement, MapProgram, Mercator, Projector, TileCache,
+    Viewpoint, Zoom, location, sources::OpenStreetMap,
 };
 
 fn main() {
@@ -61,7 +63,8 @@ impl StressTest {
                     position: Geodetic::new(
                         center.longitude() + lon_offs as f64 / 60.0,
                         center.latitude() + lat_offs as f64 / 100.0,
-                    ).as_mercator(),
+                    )
+                    .as_mercator(),
                     is_popup_open: false,
                 });
                 index += 1;
@@ -165,7 +168,7 @@ impl StressTest {
                         let image = iced::widget::canvas::Image::new(handle);
                         let bounds = iced::Rectangle::new(
                             screen_pos - Vector::new(RADIUS, RADIUS),
-                            iced::Size::new(RADIUS * 2.0, RADIUS * 2.0)
+                            iced::Size::new(RADIUS * 2.0, RADIUS * 2.0),
                         );
                         frame.draw_image(bounds, image);
                     }
@@ -175,12 +178,12 @@ impl StressTest {
                 let points: Vec<_> = self.points.iter().map(|p| (p.position, p.id)).collect();
                 let dragged_point = self.dragged_point;
 
-                move |projector, event| {
+                move |projector, cursor, event| {
                     use iced::mouse;
                     use iced::widget::canvas::Event;
 
-                    let cursor = if let Some(c) = projector.cursor {
-                        c
+                    let cursor = if let Cursor::Available(c) = cursor {
+                        *c
                     } else {
                         return Action::None;
                     };
@@ -198,9 +201,7 @@ impl StressTest {
                         Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                             if dragged_point.is_some() {
                                 let mercator = projector.screen_space_into_mercator(cursor);
-                                return Action::Capture(Message::DragMove(
-                                    mercator,
-                                ));
+                                return Action::Capture(Message::DragMove(mercator));
                             }
                         }
                         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {

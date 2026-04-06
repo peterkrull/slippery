@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use iced::touch::Finger;
 use iced_core::{
     Element, Image, Point, Rectangle, Shell, Vector, Widget,
     image::{Allocation, FilterMethod, Handle},
@@ -17,7 +18,6 @@ use crate::{
     position::Mercator,
     tile_cache::{CacheMessage, TileCache},
     tile_coord::TileCoord,
-    vec_norm,
 };
 
 // At zoom level 0, any map provider will take up this many pixels.
@@ -205,6 +205,89 @@ impl<'a, Message> MapWidget<'a, Message> {
             .remove(tile_id)
             .or_else(|| self.tile_cache.get_drawable(tile_id))
     }
+
+    fn event_cursor_moved(
+        &mut self,
+        state: &mut WidgetState,
+        needs_redraw: &mut bool,
+        projector: &Projector,
+        position: &Point,
+    ) {
+        state.cursor = Some(*position);
+
+        if let PanMove::AutoPan { .. } = state.pan_move {
+            *needs_redraw = true;
+        }
+
+        if let ZoomMove::AutoZoom { .. } = state.zoom_move {
+            *needs_redraw = true;
+        }
+
+        if let PanMove::Dragging {
+            drag_mercator,
+            last_cursor,
+            last_time,
+            velocity,
+            ..
+        } = &mut state.pan_move
+        {
+            if self.on_update.is_some() {
+                let cursor_position = projector.screen_space_into_mercator(*position);
+
+                // Add the difference in drag start position and cursor position
+                self.viewpoint
+                    .position
+                    .add_sub(*drag_mercator, cursor_position);
+
+                // Calculate velocity
+                let now = Instant::now();
+                let delta_time = (now - *last_time).as_secs_f32();
+                if delta_time > 0.0 {
+                    let delta_pos = *position - *last_cursor;
+                    let current_velocity = Vector::new(delta_pos.x, delta_pos.y) / delta_time;
+
+                    // Smooth velocity vector slightly
+                    let tau = 0.02;
+                    let alpha = tau / (tau + delta_time);
+                    *velocity = *velocity * alpha + current_velocity * (1.0 - alpha);
+
+                    *last_cursor = *position;
+                    *last_time = now;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct WidgetState {
+    pan_move: PanMove,
+    zoom_move: ZoomMove,
+    cursor: Option<Point>,
+    draw_cache: DrawCache,
+    touch: TouchState,
+}
+
+#[derive(Default)]
+struct TouchState {
+    fingers: HashMap<Finger, FingerState>,
+    second_finger_left: Option<Instant>,
+}
+
+struct FingerState {
+    position: Point<f32>,
+    velocity: Vector<f32>,
+    last_time: Instant,
+}
+
+impl FingerState {
+    pub fn new(position: Point<f32>) -> Self {
+        Self {
+            position,
+            velocity: Vector::ZERO,
+            last_time: Instant::now(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -227,16 +310,7 @@ enum PanMove {
     },
 }
 
-#[derive(Default)]
-struct WidgetState {
-    pan_move: PanMove,
-    zoom_move: ZoomMove,
-    cursor: Option<Point>,
-    draw_cache: DrawCache,
-}
-
 #[derive(Debug, Default)]
-
 enum ZoomMove {
     #[default]
     Idle,
@@ -326,7 +400,6 @@ where
         // information about the pre-update state of the viewing area.
         let projector = Projector {
             viewpoint: self.viewpoint,
-            cursor: state.cursor,
             bounds,
         };
 
@@ -466,7 +539,7 @@ where
                         .add_sub(target_mercator, center_mercator);
 
                     // Decay the velocity, less so at higher speeds
-                    let norm_velocity = vec_norm(velocity);
+                    let norm_velocity = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
                     let dynamic_tau = 0.2 + norm_velocity * 0.00005;
                     let alpha = dynamic_tau / (dynamic_tau + delta);
                     *velocity = *velocity * alpha;
@@ -478,6 +551,44 @@ where
 
                     needs_redraw = true;
                 }
+            }
+            iced::Event::Touch(event) => {
+                match event {
+                    iced::touch::Event::FingerPressed { id, position } => {
+                        state.touch.fingers.insert(*id, FingerState::new(*position));
+                    }
+                    iced::touch::Event::FingerMoved { id, position } => {
+                        match state.touch.fingers.get_mut(&id) {
+                            Some(finger_state) => {
+                                let delta_pos = finger_state.position - *position;
+                                let delta_time = finger_state.last_time.elapsed();
+                                finger_state.position = *position;
+                                finger_state.last_time = Instant::now();
+                                finger_state.velocity = delta_pos / delta_time.as_secs_f32();
+                            }
+                            None => {
+                                log::warn!("FingerMoved event on non-existent finger");
+                                state.touch.fingers.insert(*id, FingerState::new(*position));
+                            }
+                        }
+                    }
+                    iced::touch::Event::FingerLifted { id, .. }
+                    | iced::touch::Event::FingerLost { id, .. } => {
+                        state.touch.fingers.remove(id);
+                        if state.touch.fingers.len() == 1 {
+                            state.touch.second_finger_left = Some(Instant::now());
+                        } else if state.touch.fingers.is_empty() {
+                            state.touch.second_finger_left = None;
+                        }
+                    }
+                }
+
+                let average_velocity = state
+                    .touch
+                    .fingers
+                    .iter()
+                    .fold(Vector::ZERO, |accum, (_, f)| accum + f.velocity)
+                    / state.touch.fingers.len() as f32;
             }
             iced::Event::Mouse(event) => match event {
                 iced::mouse::Event::WheelScrolled { delta } if self.on_update.is_some() => {
@@ -551,8 +662,8 @@ where
                         _ => {
                             if let Some(cursor_position) = cursor.position_over(projector.bounds) {
                                 state.pan_move = PanMove::Dragging {
-                                    drag_mercator:
-                                        projector.screen_space_into_mercator(cursor_position),
+                                    drag_mercator: projector
+                                        .screen_space_into_mercator(cursor_position),
                                     last_cursor: cursor_position,
                                     last_time: Instant::now(),
                                     velocity: Vector::new(0.0, 0.0),
@@ -625,50 +736,7 @@ where
                     }
                 }
                 iced::mouse::Event::CursorMoved { position } => {
-                    state.cursor = Some(*position);
-
-                    if let PanMove::AutoPan { .. } = state.pan_move {
-                        needs_redraw = true;
-                    }
-
-                    if let ZoomMove::AutoZoom { .. } = state.zoom_move {
-                        needs_redraw = true;
-                    }
-
-                    if let PanMove::Dragging {
-                        drag_mercator,
-                        last_cursor,
-                        last_time,
-                        velocity,
-                        ..
-                    } = &mut state.pan_move
-                    {
-                        if self.on_update.is_some() {
-                            let cursor_position = projector.screen_space_into_mercator(*position);
-
-                            // Add the difference in drag start position and cursor position
-                            self.viewpoint
-                                .position
-                                .add_sub(*drag_mercator, cursor_position);
-
-                            // Calculate velocity
-                            let now = Instant::now();
-                            let delta_time = (now - *last_time).as_secs_f32();
-                            if delta_time > 0.0 {
-                                let delta_pos = *position - *last_cursor;
-                                let current_velocity =
-                                    Vector::new(delta_pos.x, delta_pos.y) / delta_time;
-
-                                // Smooth velocity vector slightly
-                                let tau = 0.02;
-                                let alpha = tau / (tau + delta_time);
-                                *velocity = *velocity * alpha + current_velocity * (1.0 - alpha);
-
-                                *last_cursor = *position;
-                                *last_time = now;
-                            }
-                        }
-                    }
+                    self.event_cursor_moved(state, &mut needs_redraw, &projector, position);
                 }
                 iced::mouse::Event::CursorLeft => {
                     state.cursor = None;
@@ -680,7 +748,6 @@ where
 
         let new_projector = Projector {
             viewpoint: self.viewpoint,
-            cursor: state.cursor,
             bounds,
         };
 
@@ -712,9 +779,7 @@ where
 
         // Enqueue loading of missing tiles with shell
         for (tile_id, _) in to_fetch {
-            shell.publish((self.cache_message)(CacheMessage::Load {
-                id: *tile_id,
-            }))
+            shell.publish((self.cache_message)(CacheMessage::Load { id: *tile_id }))
         }
 
         let mut new_draw_cache = DrawCache::new();
@@ -729,9 +794,7 @@ where
 
             // Otherwise, ensure the tile is allocated on the GPU asap!
             if self.tile_cache.should_alloc(&tile_id) {
-                shell.publish((self.cache_message)(CacheMessage::Allocate {
-                    id: tile_id,
-                }))
+                shell.publish((self.cache_message)(CacheMessage::Allocate { id: tile_id }))
             }
 
             // Try to use four children as a fallback (too fine resolution)
@@ -770,16 +833,14 @@ where
         _cursor: iced_core::mouse::Cursor,
         _viewport: &iced::Rectangle,
     ) {
-        let state = WidgetState::get_ref(&tree.state)
-            .expect("draw called prior to initializing widget state");
-
-        // Draw all tiles in order of zoom level (lowest first)
-        renderer.with_layer(layout.bounds(), |renderer| {
-            for data in state.draw_cache.iter_tiles() {
-                let image = Image::new(&data.handle).filter_method(FilterMethod::Linear);
-                renderer.draw_image(image, data.rectangle, layout.bounds())
-            }
-        });
+        if let Some(state) = WidgetState::get_ref(&tree.state) {
+            renderer.with_layer(layout.bounds(), |renderer| {
+                for data in state.draw_cache.iter_tiles() {
+                    let image = Image::new(&data.handle).filter_method(FilterMethod::Linear);
+                    renderer.draw_image(image, data.rectangle, layout.bounds())
+                }
+            });
+        }
     }
 
     fn mouse_interaction(

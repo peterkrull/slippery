@@ -32,30 +32,13 @@ enum FetcherError {
 /// or when the fetching future resolves and responds with its result.
 #[derive(Debug, Clone)]
 pub enum CacheMessage {
-    Load {
-        id: TileCoord,
-    },
-    Loaded {
-        id: TileCoord,
-        handle: Handle,
-    },
-    LoadFailed {
-        id: TileCoord,
-    },
-    Allocate {
-        id: TileCoord,
-    },
-    Allocated {
-        id: TileCoord,
-        alloc: Allocation,
-    },
-    AllocFailed {
-        id: TileCoord,
-        err: image::Error,
-    },
-    Deallocate {
-        id: TileCoord,
-    },
+    Load { id: TileCoord },
+    Loaded { id: TileCoord, handle: Handle },
+    LoadFailed { id: TileCoord },
+    Allocate { id: TileCoord },
+    Allocated { id: TileCoord, alloc: Allocation },
+    AllocFailed { id: TileCoord, err: image::Error },
+    Deallocate { id: TileCoord },
     Prune,
 }
 
@@ -264,7 +247,7 @@ impl TileCache {
                             entry.touch();
 
                             // The allocation is Arc, so widgets will hold on if they need it longer
-                            // Except for the lowest zoom levels, keep those allocated as a last resort 
+                            // Except for the lowest zoom levels, keep those allocated as a last resort
                             if id.zoom() > 1 {
                                 auto_dealloc_task = Task::future(async move {
                                     tokio::time::sleep(Duration::from_millis(100)).await;
