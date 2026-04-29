@@ -24,8 +24,8 @@ use crate::{
 pub const BASE_SIZE: u32 = 512;
 
 const TOUCH_SMOOTHING_TAU: f32 = 0.03;
-const TOUCH_PAN_MOMENTUM_THRESHOLD: f32 = 10.0;
-const TOUCH_ZOOM_MOMENTUM_THRESHOLD: f64 = 0.12;
+const TOUCH_PAN_VEL_MOMENTUM_THRESHOLD: f32 = 10.0;
+const TOUCH_ZOOM_VEL_MOMENTUM_THRESHOLD: f64 = 0.12;
 const TOUCH_PINCH_ZOOM_GAIN: f64 = 1.0;
 const TOUCH_PINCH_RELEASE_GRACE: Duration = Duration::from_millis(50);
 const TOUCH_MOMENTUM_MAX_GAP: Duration = Duration::from_millis(50);
@@ -387,6 +387,7 @@ enum ZoomMove {
         start_time: Instant,
         start_zoom: f64,
         velocity: f64,
+        tau: f64,
     },
     Discrete {
         point: Option<Mercator>,
@@ -480,13 +481,13 @@ where
                         start_time,
                         start_zoom,
                         velocity,
+                        tau
                     } => {
                         let elapsed = (*at - *start_time).as_secs_f64();
-                        let tau = 0.05;
 
                         // Analytic position: x(t) = x0 + v0 * tau * (1 - e^(-t/tau))
                         let target_zoom =
-                            *start_zoom + *velocity * tau * (1.0 - (-elapsed / tau).exp());
+                            *start_zoom + *velocity * *tau * (1.0 - (-elapsed / *tau).exp());
                         let zoom_amt = target_zoom - self.viewpoint.zoom.f64();
 
                         if let Some(position) = point {
@@ -498,7 +499,7 @@ where
                         }
 
                         // v(t) = v0 * e^(-t/tau)
-                        let current_velocity = *velocity * (-elapsed / tau).exp();
+                        let current_velocity = *velocity * (-elapsed / *tau).exp();
                         if current_velocity.abs() < 0.1 {
                             state.zoom_move = ZoomMove::Idle;
                         }
@@ -677,9 +678,14 @@ where
                         }
                     }
 
+                    let suppress_single_finger_pan = state.touch.fingers.len() == 1
+                        && state.touch.second_finger_left.is_some_and(|left| {
+                            now.duration_since(left) <= TOUCH_PINCH_RELEASE_GRACE
+                        });
+
                     if let Some(centroid) = state.touch.centroid() {
                         if let Some(last_centroid) = state.touch.last_centroid {
-                            if self.on_update.is_some() {
+                            if self.on_update.is_some() && !suppress_single_finger_pan {
                                 let old_mercator =
                                     projector.screen_space_into_mercator(last_centroid);
                                 let new_mercator = projector.screen_space_into_mercator(centroid);
@@ -694,15 +700,25 @@ where
                     if delta_time > 0.0 {
                         state.touch.last_motion = Some(now);
 
-                        if let Some(avg_velocity) = state.touch.average_velocity() {
-                            let alpha = TOUCH_SMOOTHING_TAU / (TOUCH_SMOOTHING_TAU + delta_time);
-                            state.touch.smoothed_pan_velocity = state.touch.smoothed_pan_velocity
-                                * alpha
-                                + avg_velocity * (1.0 - alpha);
+                        if !suppress_single_finger_pan {
+                            if let Some(avg_velocity) = state.touch.average_velocity() {
+                                let alpha =
+                                    TOUCH_SMOOTHING_TAU / (TOUCH_SMOOTHING_TAU + delta_time);
+                                state.touch.smoothed_pan_velocity =
+                                    state.touch.smoothed_pan_velocity * alpha
+                                        + avg_velocity * (1.0 - alpha);
+                            }
+                        } else {
+                            state.touch.smoothed_pan_velocity = Vector::ZERO;
+                        }
+
+                        if suppress_single_finger_pan {
+                            state.touch.last_motion = None;
                         }
                     }
 
-                    if state.touch.fingers.len() >= 2 {
+                    // Multiple fingers
+                    if state.touch.fingers.len() > 1 {
                         if let (Some(centroid), Some(pinch_distance)) =
                             (state.touch.last_centroid, state.touch.pinch_distance())
                         {
@@ -726,8 +742,7 @@ where
                                         }
 
                                         let raw_zoom_velocity = zoom_delta / delta_time as f64;
-                                        let tau = TOUCH_SMOOTHING_TAU as f64;
-                                        let alpha = tau / (tau + delta_time as f64);
+                                        let alpha = (TOUCH_SMOOTHING_TAU / (TOUCH_SMOOTHING_TAU + delta_time)) as f64;
                                         state.touch.smoothed_pinch_velocity =
                                             state.touch.smoothed_pinch_velocity * alpha
                                                 + raw_zoom_velocity * (1.0 - alpha);
@@ -762,57 +777,63 @@ where
 
                     state.touch.fingers.remove(id);
 
-                    if state.touch.fingers.len() == 1 {
-                        state.touch.second_finger_left = Some(now);
-                        state.touch.last_centroid = state.touch.centroid();
-                        state.touch.last_pinch_distance = None;
-                        state.touch.smoothed_pinch_velocity = 0.0;
-                    } else if state.touch.fingers.is_empty() {
-                        let moved_recently = state
-                            .touch
-                            .last_motion
-                            .is_some_and(|last| now.duration_since(last) <= TOUCH_MOMENTUM_MAX_GAP);
+                    match state.touch.fingers.len() {
+                        0 => {
+                            let moved_recently = state
+                                .touch
+                                .last_motion
+                                .is_some_and(|last| now.duration_since(last) <= TOUCH_MOMENTUM_MAX_GAP);
 
-                        if moved_recently
-                            && (state.touch.smoothed_pan_velocity.x.abs()
-                                > TOUCH_PAN_MOMENTUM_THRESHOLD
-                                || state.touch.smoothed_pan_velocity.y.abs()
-                                    > TOUCH_PAN_MOMENTUM_THRESHOLD)
-                        {
-                            state.pan_move = PanMove::Momentum {
-                                velocity: state.touch.smoothed_pan_velocity,
-                                last_time: now,
-                            };
-                            needs_redraw = true;
-                        }
+                            let velocity = state.touch.smoothed_pan_velocity;
+                            let velocity_norm = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
 
-                        let allow_zoom_momentum =
-                            state.touch.second_finger_left.is_some_and(|left| {
-                                now.duration_since(left) <= TOUCH_PINCH_RELEASE_GRACE
-                            });
+                            if moved_recently && velocity_norm > TOUCH_PAN_VEL_MOMENTUM_THRESHOLD
+                            {
+                                state.pan_move = PanMove::Momentum {
+                                    velocity: state.touch.smoothed_pan_velocity,
+                                    last_time: now,
+                                };
+                                needs_redraw = true;
+                            }
 
-                        if moved_recently && allow_zoom_momentum {
-                            if let (Some(velocity), Some(point)) = (
-                                state.touch.pinch_release_velocity,
-                                state.touch.pinch_release_point,
-                            ) {
-                                if velocity.abs() > TOUCH_ZOOM_MOMENTUM_THRESHOLD {
-                                    state.zoom_move = ZoomMove::Continuous {
-                                        point: Some(point),
-                                        start_time: now,
-                                        start_zoom: self.viewpoint.zoom.f64(),
-                                        velocity,
-                                    };
-                                    needs_redraw = true;
+                            let allow_zoom_momentum =
+                                state.touch.second_finger_left.is_some_and(|left| {
+                                    now.duration_since(left) <= TOUCH_PINCH_RELEASE_GRACE
+                                });
+
+                            if moved_recently && allow_zoom_momentum {
+                                if let (Some(velocity), Some(point)) = (
+                                    state.touch.pinch_release_velocity,
+                                    state.touch.pinch_release_point,
+                                ) {
+                                    if velocity.abs() > TOUCH_ZOOM_VEL_MOMENTUM_THRESHOLD {
+                                        state.zoom_move = ZoomMove::Continuous {
+                                            point: Some(point),
+                                            start_time: now,
+                                            start_zoom: self.viewpoint.zoom.f64(),
+                                            velocity,
+                                            tau: 0.2,
+                                        };
+                                        needs_redraw = true;
+                                    }
                                 }
                             }
-                        }
 
-                        state.touch.clear_after_release();
-                    } else {
-                        state.touch.second_finger_left = None;
-                        state.touch.last_centroid = state.touch.centroid();
-                        state.touch.last_pinch_distance = state.touch.pinch_distance();
+                            state.touch.clear_after_release();
+                        }
+                        1 => {
+                            state.touch.second_finger_left = Some(now);
+                            state.touch.last_centroid = state.touch.centroid();
+                            state.touch.last_pinch_distance = None;
+                            state.touch.smoothed_pan_velocity = Vector::ZERO;
+                            state.touch.smoothed_pinch_velocity = 0.0;
+                            state.touch.last_motion = None;
+                        }
+                        _ => {
+                            state.touch.second_finger_left = None;
+                            state.touch.last_centroid = state.touch.centroid();
+                            state.touch.last_pinch_distance = state.touch.pinch_distance();
+                        }
                     }
 
                     shell.capture_event();
@@ -875,6 +896,7 @@ where
                                 start_time: now,
                                 start_zoom: self.viewpoint.zoom.f64(),
                                 velocity,
+                                tau: 0.05,
                             };
                         }
                     }
@@ -962,6 +984,7 @@ where
                         }
                         _ => (),
                     }
+                    shell.capture_event();
                 }
                 iced::mouse::Event::CursorMoved { position } => {
                     self.event_cursor_moved(state, &mut needs_redraw, &projector, position);
@@ -974,24 +997,28 @@ where
             _ => (),
         }
 
+        if needs_redraw {
+            shell.request_redraw();
+        }
+
         let new_projector = Projector {
             viewpoint: self.viewpoint,
             bounds,
         };
 
-        if projector.viewpoint != self.viewpoint || needs_redraw {
+        if projector.viewpoint != self.viewpoint {
             if let Some(on_update) = &self.on_update {
                 shell.publish(on_update(new_projector.clone()));
             }
-            shell.capture_event();
-            shell.request_redraw();
         }
 
-        // TODO: Limit this so that it only runs just before the draw call
-
-        let visible_tiles = self.flood_tiles(&new_projector);
-
+        // Only when a redraw is requested do we recalculate the draw cache
+        if !matches!(event, iced::Event::Window(iced::window::Event::RedrawRequested(_))) {
+            return
+        }
+        
         // Construct vector of tiles that should be fetched
+        let visible_tiles = self.flood_tiles(&new_projector);
         let mut to_fetch = visible_tiles
             .iter()
             .filter(|(tile_id, _)| self.tile_cache.should_load(&tile_id))
