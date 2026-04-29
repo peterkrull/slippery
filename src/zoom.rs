@@ -72,15 +72,15 @@ mod tests {
     #[test]
     fn test_constructing_zoom() {
         assert_eq!(16, Zoom::default().round());
-        assert_eq!(26, Zoom::try_from(26.).unwrap().round());
-        assert_eq!(InvalidZoom, Zoom::try_from(27.).unwrap_err());
+        assert_eq!(20, Zoom::try_from(20.).unwrap().round());
+        assert_eq!(InvalidZoom, Zoom::try_from(21.).unwrap_err());
     }
 
     #[test]
     fn test_zooming_in() {
-        let mut zoom = Zoom::try_from(25.).unwrap();
+        let mut zoom = Zoom::try_from(19.).unwrap();
         assert!(zoom.zoom_in().is_ok());
-        assert_eq!(26, zoom.round());
+        assert_eq!(20, zoom.round());
         assert_eq!(Err(InvalidZoom), zoom.zoom_in());
     }
 

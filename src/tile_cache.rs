@@ -175,12 +175,6 @@ impl TileCache {
                     }
                     retain
                 });
-                let elapsed = start_time.elapsed();
-                let pruned = start_size - self.cache.len();
-                println!(
-                    "Time to prune: {elapsed:?}, pruned {pruned}, down from {start_size}, now {}",
-                    self.cache.len()
-                );
                 Task::none()
             }
             CacheMessage::Load { id } => {
