@@ -92,27 +92,25 @@ where
         iced_core::layout::Node::with_children(bounds.size(), nodes)
     }
 
-    fn children(&self) -> Vec<tree::Tree> {
-        let mut children = vec![tree::Tree::new(&self.base)];
-        children.extend(self.children.iter().map(|c| tree::Tree::new(&c.element)));
-        children
-    }
-
-    fn diff(&self, tree: &mut tree::Tree) {
-        // 1. Diff the base map (always index 0)
-        tree.children[0].diff(&self.base);
-
-        // 2. Diff existing children and append new ones
-        for (i, child) in self.children.iter().enumerate() {
-            let idx = i + 1;
-            if idx < tree.children.len() {
-                tree.children[idx].diff(&child.element);
-            } else {
-                tree.children.push(tree::Tree::new(&child.element));
-            }
+    fn diff(&mut self, tree: &mut tree::Tree) {
+        // 1. Ensure the tree has a child for the base
+        if tree.children.is_empty() {
+            tree.children.push(tree::Tree::new(&self.base));
         }
 
-        // 3. Remove excess children if we shrank
+        // 2. Diff the base map (always index 0)
+        tree.children[0].diff(&mut self.base);
+
+        // 3. Diff existing children and append new ones
+        for (i, child) in self.children.iter_mut().enumerate() {
+            let idx = i + 1;
+            if idx >= tree.children.len() {
+                tree.children.push(tree::Tree::new(&child.element));
+            }
+            tree.children[idx].diff(&mut child.element);
+        }
+
+        // 4. Remove excess children if we shrank
         tree.children.truncate(self.children.len() + 1);
     }
 
