@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", default-features = false, features = ["image", "canvas", "tokio", "wgpu", "wayland", "x11", "debug"] }
+iced = { git = "https://github.com/iced-rs/iced", default-features = false, features = ["image", "canvas", "tokio"] }
 iced_core = { git = "https://github.com/iced-rs/iced", features = ["advanced"] }
 iced_graphics = { git = "https://github.com/iced-rs/iced" }
 
@@ -23,4 +23,4 @@ env_logger = "0.11.8"
 
 [dev-dependencies]
 approx = "0.5.1"
-
+iced = { git = "https://github.com/iced-rs/iced", default-features = false, features = ["image", "canvas", "tokio", "wgpu", "wayland", "x11"] }
