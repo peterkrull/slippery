@@ -178,6 +178,9 @@ mod position_tests {
 
         assert_eq!(position, converted);
 
-        assert_eq!(pixel_space, iced::Point::new(BASE_SIZE as f64, BASE_SIZE as f64))
+        assert_eq!(
+            pixel_space,
+            iced::Point::new(BASE_SIZE as f64, BASE_SIZE as f64)
+        )
     }
 }

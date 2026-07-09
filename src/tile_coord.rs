@@ -55,8 +55,7 @@ impl TileCoord {
         )
     }
 
-    // Obtain a lower-zoom level TileID that covers this tile.
-    // Useful for filling in not-yet loaded tiles.
+    /// Get the parent (lower zoom) for this tile.
     pub fn parent(&self) -> Option<TileCoord> {
         Some(TileCoord {
             x: self.x / 2,
@@ -65,6 +64,7 @@ impl TileCoord {
         })
     }
 
+    /// Get the four immediate children (higher zoom) to this tile.
     pub fn children(&self) -> Option<[TileCoord; 4]> {
         let zoom = self.zoom.checked_add(1)?;
         Some([
@@ -125,9 +125,5 @@ impl TileCoord {
 
     pub fn neighbors(&self) -> [Option<TileCoord>; 4] {
         [self.north(), self.east(), self.south(), self.west()]
-    }
-
-    pub fn valid(&self) -> bool {
-        self.x < total_tiles(self.zoom) && self.y < total_tiles(self.zoom)
     }
 }

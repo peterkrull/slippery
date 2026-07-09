@@ -1,5 +1,8 @@
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, alignment};
-use iced_core::{Layout, Shell, Widget, mouse, overlay, renderer, widget::tree};
+use iced_core::{
+    Layout, Shell, Widget, mouse, overlay, renderer,
+    widget::{self, tree},
+};
 
 use crate::{GlobalElement, Projector, Viewpoint};
 
@@ -114,6 +117,39 @@ where
         tree.children.truncate(self.children.len() + 1);
     }
 
+    fn operate(
+        &mut self,
+        tree: &mut tree::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        operation.container(None, layout.bounds());
+        operation.traverse(&mut |operation| {
+            let mut children_layout = layout.children();
+            let base_layout = children_layout.next().unwrap();
+            let (base_tree, children_trees) = tree.children.split_first_mut().unwrap();
+
+            self.base
+                .as_widget_mut()
+                .operate(base_tree, base_layout, renderer, operation);
+
+            for ((child, child_tree), child_layout) in self
+                .children
+                .iter_mut()
+                .zip(children_trees.iter_mut())
+                .zip(children_layout)
+            {
+                child.element.as_widget_mut().operate(
+                    child_tree,
+                    child_layout,
+                    renderer,
+                    operation,
+                );
+            }
+        });
+    }
+
     fn update(
         &mut self,
         tree: &mut tree::Tree,
@@ -126,14 +162,17 @@ where
     ) {
         let mut children_layout = layout.children();
         let base_layout = children_layout.next().unwrap();
-        let layouts: Vec<_> = children_layout.collect();
+        let (base_tree, children_trees) = tree.children.split_first_mut().unwrap();
 
         // Update children first (reverse order - top to bottom)
         // This allows children to capture events before the map
-        for (i, child) in self.children.iter_mut().enumerate().rev() {
-            let child_tree = &mut tree.children[i + 1];
-            let child_layout = layouts[i];
-
+        for ((child, child_tree), child_layout) in self
+            .children
+            .iter_mut()
+            .rev()
+            .zip(children_trees.iter_mut().rev())
+            .zip(children_layout.rev())
+        {
             child.element.as_widget_mut().update(
                 child_tree,
                 event,
@@ -151,7 +190,7 @@ where
 
         // Update base map
         self.base.as_widget_mut().update(
-            &mut tree.children[0],
+            base_tree,
             event,
             base_layout,
             cursor,
@@ -171,13 +210,16 @@ where
     ) -> mouse::Interaction {
         let mut children_layout = layout.children();
         let base_layout = children_layout.next().unwrap();
-        let layouts: Vec<_> = children_layout.collect();
+        let (base_tree, children_trees) = tree.children.split_first().unwrap();
 
-        // Check children interactions first
-        for (i, child) in self.children.iter().enumerate().rev() {
-            let child_tree = &tree.children[i + 1];
-            let child_layout = layouts[i];
-
+        // Check children interactions first (reverse order - top to bottom)
+        for ((child, child_tree), child_layout) in self
+            .children
+            .iter()
+            .rev()
+            .zip(children_trees.iter().rev())
+            .zip(children_layout.rev())
+        {
             let interaction = child.element.as_widget().mouse_interaction(
                 child_tree,
                 child_layout,
@@ -192,13 +234,9 @@ where
         }
 
         // Fallback to base map interaction
-        self.base.as_widget().mouse_interaction(
-            &tree.children[0],
-            base_layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.base
+            .as_widget()
+            .mouse_interaction(base_tree, base_layout, cursor, viewport, renderer)
     }
 
     fn draw(

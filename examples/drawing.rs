@@ -141,6 +141,7 @@ impl Application {
 
                 for city in cities {
                     let pos = projector.geodetic_into_screen_space(city);
+
                     let circle = Path::circle(pos, 8.0);
                     frame.fill(&circle, Color::from_rgb(0.0, 0.5, 1.0));
 

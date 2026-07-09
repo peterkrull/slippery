@@ -1,7 +1,10 @@
 use std::{
     cell::Cell,
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -17,15 +20,6 @@ use crate::{
 const PRUNE_TIME: Duration = Duration::from_secs(60);
 const PRUNE_THRESH: usize = 1024;
 
-#[derive(thiserror::Error, Debug)]
-enum FetcherError {
-    #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error("The semaphore timed out")]
-    SemaphoreTimeout,
-    #[error("The samaphore was closed")]
-    SemaphoreClosed,
-}
 
 /// The message that the [`TileCache`] uses to update. It is typically produced when
 /// interacting with a [`crate::map_widget::MapWidget`] in order to fetch new tiles,
@@ -74,9 +68,12 @@ impl Entry {
 /// An application can hold multiple caches with different tile sources
 pub struct TileCache {
     cache: HashMap<TileCoord, Entry>,
-    fetcher: Arc<HttpFetcher>,
+    fetcher: Arc<dyn Fetcher>,
     cleanup_timer: Instant,
 }
+
+static PARALLEL_IMAGE_ALLOCS: AtomicU32 = AtomicU32::new(0);
+const MAX_PARALLEL_IMAGE_ALLOCS: u32 = 10;
 
 impl TileCache {
     /// The [`MapState`] acts acts as a stateful backend for the [`crate::MapWidget`]. It returns an instance
@@ -99,15 +96,15 @@ impl TileCache {
     }
 
     pub fn attribution(&self) -> Attribution {
-        self.fetcher.source.attribution()
+        self.fetcher.source().attribution()
     }
 
     pub fn tile_size(&self) -> u32 {
-        self.fetcher.source.tile_size()
+        self.fetcher.source().tile_size()
     }
 
     pub fn max_zoom(&self) -> u8 {
-        self.fetcher.source.max_zoom()
+        self.fetcher.source().max_zoom()
     }
 
     pub fn should_load(&self, tile_id: &TileCoord) -> bool {
@@ -184,13 +181,8 @@ impl TileCache {
                     // Insert entry to indicate the tile is being loaded
                     self.cache.insert(id, Entry::new(State::Loading));
 
-                    let handle = self.fetcher.clone();
-                    Task::future(async move {
-                        match handle.fetch_tile(id).await {
-                            Ok(tile) => CacheMessage::Loaded { id, handle: tile },
-                            Err(_) => CacheMessage::LoadFailed { id },
-                        }
-                    })
+                    let fetcher = self.fetcher.clone();
+                    fetcher.fetch_tile(id)
                 }
             }
             CacheMessage::Loaded { id, handle } => {
@@ -214,12 +206,21 @@ impl TileCache {
                 if let Some(entry) = self.cache.get_mut(&id)
                     && let State::Loaded(handle) = &entry.state
                 {
-                    let alloc_task = iced::widget::image::allocate(handle.clone()).map(
-                        move |result| match result {
-                            Ok(alloc) => CacheMessage::Allocated { id, alloc },
-                            Err(err) => CacheMessage::AllocFailed { id, err },
-                        },
-                    );
+                    if PARALLEL_IMAGE_ALLOCS.fetch_add(1, Ordering::Relaxed)
+                        > MAX_PARALLEL_IMAGE_ALLOCS
+                    {
+                        PARALLEL_IMAGE_ALLOCS.fetch_sub(1, Ordering::Relaxed);
+                        return cleanup_task;
+                    }
+
+                    let alloc_task =
+                        iced::widget::image::allocate(handle.clone()).map(move |result| {
+                            PARALLEL_IMAGE_ALLOCS.fetch_sub(1, Ordering::Relaxed);
+                            match result {
+                                Ok(alloc) => CacheMessage::Allocated { id, alloc },
+                                Err(err) => CacheMessage::AllocFailed { id, err },
+                            }
+                        });
 
                     entry.state = State::Allocating(handle.clone());
                     entry.touch();
@@ -281,6 +282,17 @@ impl TileCache {
     }
 }
 
+trait Fetcher {
+    fn fetch_tile(self: Arc<Self>, tile: TileCoord) -> Task<CacheMessage>;
+    fn source(&self) -> &dyn Source;
+}
+
+impl core::fmt::Debug for dyn Fetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Fetcher..")
+    }
+}
+
 /// The fetcher is cloned and moved into an async task to fetch a tile.
 #[derive(Debug)]
 struct HttpFetcher {
@@ -289,28 +301,51 @@ struct HttpFetcher {
     client: reqwest::Client,
 }
 
-impl HttpFetcher {
-    async fn fetch_tile(&self, tile_id: TileCoord) -> Result<Handle, FetcherError> {
-        // Semaphore ensures we are not making too many requests.
-        // Assume that if we have been waiting for a while, that the
-        // viewpoint may have moved and the tile in no longer needed.
-        // If it was needed, another fetch request will just be made.
-        let _permit = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            self.semaphore.acquire(),
-        )
-        .await
-        .map_err(|_| FetcherError::SemaphoreTimeout)?
-        .map_err(|_| FetcherError::SemaphoreClosed)?;
+#[derive(thiserror::Error, Debug)]
+enum FetcherError {
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error("The semaphore timed out")]
+    SemaphoreTimeout,
+    #[error("The samaphore was closed")]
+    SemaphoreClosed,
+}
 
-        // Construct the http request
-        let source = self.source.tile_url(tile_id);
+impl Fetcher for HttpFetcher {
+    fn fetch_tile(self: Arc<Self>, tile_id: TileCoord) -> Task<CacheMessage> {
+        Task::future(async move {
+            // Semaphore ensures we are not making too many requests.
+            // Assume that if we have been waiting for a while, that the
+            // viewpoint may have moved and the tile in no longer needed.
+            // If it was needed, another fetch request will just be made.
+            let _permit = tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                self.semaphore.acquire(),
+            )
+            .await
+            .map_err(|_| FetcherError::SemaphoreTimeout)?
+            .map_err(|_| FetcherError::SemaphoreClosed)?;
 
-        // Make request to tile source and get response
-        let response = self.client.get(source).send().await?.error_for_status()?;
+            // Construct the http request
+            let source = self.source.tile_url(tile_id);
 
-        // Returns the bytes as an image handle
-        let bytes = response.bytes().await?;
-        Ok(Handle::from_bytes(bytes))
+            // Make request to tile source and get response
+            let response = self.client.get(source).send().await?.error_for_status()?;
+
+            // Returns the bytes as an image handle
+            let bytes = response.bytes().await?;
+            Ok::<_, FetcherError>(Handle::from_bytes(bytes))
+        })
+        .map(move |res| match res {
+            Ok(tile) => CacheMessage::Loaded {
+                id: tile_id,
+                handle: tile,
+            },
+            Err(_) => CacheMessage::LoadFailed { id: tile_id },
+        })
+    }
+
+    fn source(&self) -> &dyn Source {
+        &*self.source
     }
 }

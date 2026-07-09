@@ -481,7 +481,7 @@ where
                         start_time,
                         start_zoom,
                         velocity,
-                        tau
+                        tau,
                     } => {
                         let elapsed = (*at - *start_time).as_secs_f64();
 
@@ -742,7 +742,9 @@ where
                                         }
 
                                         let raw_zoom_velocity = zoom_delta / delta_time as f64;
-                                        let alpha = (TOUCH_SMOOTHING_TAU / (TOUCH_SMOOTHING_TAU + delta_time)) as f64;
+                                        let alpha = (TOUCH_SMOOTHING_TAU
+                                            / (TOUCH_SMOOTHING_TAU + delta_time))
+                                            as f64;
                                         state.touch.smoothed_pinch_velocity =
                                             state.touch.smoothed_pinch_velocity * alpha
                                                 + raw_zoom_velocity * (1.0 - alpha);
@@ -779,16 +781,14 @@ where
 
                     match state.touch.fingers.len() {
                         0 => {
-                            let moved_recently = state
-                                .touch
-                                .last_motion
-                                .is_some_and(|last| now.duration_since(last) <= TOUCH_MOMENTUM_MAX_GAP);
+                            let moved_recently = state.touch.last_motion.is_some_and(|last| {
+                                now.duration_since(last) <= TOUCH_MOMENTUM_MAX_GAP
+                            });
 
                             let velocity = state.touch.smoothed_pan_velocity;
                             let velocity_norm = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
 
-                            if moved_recently && velocity_norm > TOUCH_PAN_VEL_MOMENTUM_THRESHOLD
-                            {
+                            if moved_recently && velocity_norm > TOUCH_PAN_VEL_MOMENTUM_THRESHOLD {
                                 state.pan_move = PanMove::Momentum {
                                     velocity: state.touch.smoothed_pan_velocity,
                                     last_time: now,
@@ -1013,10 +1013,13 @@ where
         }
 
         // Only when a redraw is requested do we recalculate the draw cache
-        if !matches!(event, iced::Event::Window(iced::window::Event::RedrawRequested(_))) {
-            return
+        if !matches!(
+            event,
+            iced::Event::Window(iced::window::Event::RedrawRequested(_))
+        ) {
+            return;
         }
-        
+
         // Construct vector of tiles that should be fetched
         let visible_tiles = self.flood_tiles(&new_projector);
         let mut to_fetch = visible_tiles
