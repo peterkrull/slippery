@@ -43,35 +43,34 @@ where
         tree: &mut tree::Tree,
         renderer: &Renderer,
         limits: &iced_core::layout::Limits,
-    ) -> iced_core::layout::Node {
+    ) {
         // 1. Layout the base map first
         // It provides the context/bounds for the projection
-        let base_node = self
-            .base
+        self.base
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits);
 
-        // We use the base node's size, but we ensure the projector bounds start at 0,0
-        // because the children nodes will be placed relative to this widget's origin.
-        let bounds = Rectangle::new(Point::ORIGIN, base_node.bounds().size());
+        // We use the base child's size, but we ensure the projector bounds start
+        // at 0,0 because the children are placed relative to this widget's origin.
+        let base_size = tree.children[0].size;
+        let bounds = Rectangle::new(Point::ORIGIN, base_size);
 
         let projector = Projector {
             viewpoint: self.viewpoint,
             bounds,
         };
 
-        let mut nodes = Vec::with_capacity(1 + self.children.len());
-        nodes.push(base_node);
-
         for (i, child) in self.children.iter_mut().enumerate() {
-            // Layout children with relaxed limits (0 to max)
-            let child_node = child.element.as_widget_mut().layout(
-                &mut tree.children[i + 1],
+            let child_tree = &mut tree.children[i + 1];
+
+            // Layout children with relaxed limits (0 to the base map's size)
+            child.element.as_widget_mut().layout(
+                child_tree,
                 renderer,
-                &iced_core::layout::Limits::new(Size::ZERO, limits.max()),
+                &iced_core::layout::Limits::new(Size::ZERO, base_size),
             );
 
-            let child_size = child_node.size();
+            let child_size = child_tree.size;
             let position = child.position;
 
             // Project geodetical position to relative screen coordinates
@@ -89,10 +88,10 @@ where
                 alignment::Vertical::Bottom => screen_pos.y - child_size.height,
             };
 
-            nodes.push(child_node.move_to(Point::new(x, y)));
+            child_tree.translation = Vector::new(x, y);
         }
 
-        iced_core::layout::Node::with_children(bounds.size(), nodes)
+        tree.size = base_size;
     }
 
     fn diff(&mut self, tree: &mut tree::Tree) {
@@ -120,29 +119,25 @@ where
     fn operate(
         &mut self,
         tree: &mut tree::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        operation.container(None, layout.bounds());
+        operation.container(None, layout.bounds(), viewport);
         operation.traverse(&mut |operation| {
-            let mut children_layout = layout.children();
-            let base_layout = children_layout.next().unwrap();
-            let (base_tree, children_trees) = tree.children.split_first_mut().unwrap();
+            let mut layouts = layout.iter_mut(&mut tree.children);
+            let (base_layout, base_tree) = layouts.next().unwrap();
 
             self.base
                 .as_widget_mut()
-                .operate(base_tree, base_layout, renderer, operation);
+                .operate(base_tree, base_layout, viewport, renderer, operation);
 
-            for ((child, child_tree), child_layout) in self
-                .children
-                .iter_mut()
-                .zip(children_trees.iter_mut())
-                .zip(children_layout)
-            {
+            for (child, (child_layout, child_tree)) in self.children.iter_mut().zip(layouts) {
                 child.element.as_widget_mut().operate(
                     child_tree,
                     child_layout,
+                    viewport,
                     renderer,
                     operation,
                 );
@@ -154,24 +149,19 @@ where
         &mut self,
         tree: &mut tree::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let mut children_layout = layout.children();
-        let base_layout = children_layout.next().unwrap();
-        let (base_tree, children_trees) = tree.children.split_first_mut().unwrap();
+        let mut layouts = layout.iter_mut(&mut tree.children);
+        let (base_layout, base_tree) = layouts.next().unwrap();
 
         // Update children first (reverse order - top to bottom)
         // This allows children to capture events before the map
-        for ((child, child_tree), child_layout) in self
-            .children
-            .iter_mut()
-            .rev()
-            .zip(children_trees.iter_mut().rev())
-            .zip(children_layout.rev())
+        for (child, (child_layout, child_tree)) in
+            self.children.iter_mut().rev().zip(layouts.rev())
         {
             child.element.as_widget_mut().update(
                 child_tree,
@@ -203,22 +193,17 @@ where
     fn mouse_interaction(
         &self,
         tree: &tree::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        let mut children_layout = layout.children();
-        let base_layout = children_layout.next().unwrap();
-        let (base_tree, children_trees) = tree.children.split_first().unwrap();
+        let mut layouts = layout.iter(&tree.children);
+        let (base_layout, base_tree) = layouts.next().unwrap();
 
         // Check children interactions first (reverse order - top to bottom)
-        for ((child, child_tree), child_layout) in self
-            .children
-            .iter()
-            .rev()
-            .zip(children_trees.iter().rev())
-            .zip(children_layout.rev())
+        for (child, (child_layout, child_tree)) in
+            self.children.iter().rev().zip(layouts.rev())
         {
             let interaction = child.element.as_widget().mouse_interaction(
                 child_tree,
@@ -228,7 +213,7 @@ where
                 renderer,
             );
 
-            if interaction != mouse::Interaction::Idle {
+            if interaction != mouse::Interaction::None {
                 return interaction;
             }
         }
@@ -245,16 +230,16 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let mut children_layout = layout.children();
-        let base_layout = children_layout.next().unwrap();
+        let mut layouts = layout.iter(&tree.children);
+        let (base_layout, base_tree) = layouts.next().unwrap();
 
         // 1. Draw base map
         self.base.as_widget().draw(
-            &tree.children[0],
+            base_tree,
             renderer,
             theme,
             style,
@@ -265,10 +250,7 @@ where
 
         // 2. Draw children on top
         renderer.with_layer(layout.bounds(), |renderer| {
-            for (i, child) in self.children.iter().enumerate() {
-                let child_tree = &tree.children[i + 1];
-                let child_layout = children_layout.next().unwrap();
-
+            for (child, (child_layout, child_tree)) in self.children.iter().zip(layouts) {
                 if child_layout.bounds().intersects(viewport) {
                     child.element.as_widget().draw(
                         child_tree,
@@ -287,43 +269,38 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut tree::Tree,
-        layout: Layout<'b>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        let mut children_layout = layout.children();
-        let base_layout = children_layout.next().unwrap();
+        window: Size,
+    ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
+        let mut layouts = layout.iter_mut(&mut tree.children);
+        let (base_layout, base_tree) = layouts.next().unwrap();
 
         let mut overlays = Vec::new();
 
-        // Split tree to access base independently from children
-        let (base_tree, children_trees) = tree.children.split_first_mut().unwrap();
-
-        if let Some(overlay) = self.base.as_widget_mut().overlay(
+        overlays.extend(self.base.as_widget_mut().overlay(
             base_tree,
             base_layout,
             renderer,
             viewport,
             translation,
-        ) {
-            overlays.push(overlay);
-        }
+            window,
+        ));
 
-        for (child, child_tree) in self.children.iter_mut().zip(children_trees.iter_mut()) {
-            let child_layout = children_layout.next().unwrap();
-            if let Some(overlay) = child.element.as_widget_mut().overlay(
+        for (child, (child_layout, child_tree)) in self.children.iter_mut().zip(layouts) {
+            overlays.extend(child.element.as_widget_mut().overlay(
                 child_tree,
                 child_layout,
                 renderer,
                 viewport,
                 translation,
-            ) {
-                overlays.push(overlay);
-            }
+                window,
+            ));
         }
 
-        (!overlays.is_empty()).then(|| overlay::Group::with_children(overlays).overlay())
+        overlays
     }
 }
 

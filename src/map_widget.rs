@@ -440,20 +440,18 @@ where
 
     fn layout(
         &mut self,
-        _tree: &mut iced_core::widget::Tree,
+        tree: &mut iced_core::widget::Tree,
         _renderer: &Renderer,
         limits: &iced_core::layout::Limits,
-    ) -> iced_core::layout::Node {
-        let size = limits.max();
-
-        iced_core::layout::Node::new(size)
+    ) {
+        tree.size = limits.max;
     }
 
     fn update(
         &mut self,
         tree: &mut iced_core::widget::Tree,
         event: &iced::Event,
-        layout: iced_core::Layout<'_>,
+        layout: iced_core::Layout,
         cursor: iced_core::mouse::Cursor,
         _renderer: &Renderer,
         shell: &mut iced_core::Shell<'_, Message>,
@@ -1087,7 +1085,7 @@ where
         renderer: &mut Renderer,
         _theme: &Theme,
         _style: &iced_core::renderer::Style,
-        layout: iced_core::Layout<'_>,
+        layout: iced_core::Layout,
         _cursor: iced_core::mouse::Cursor,
         _viewport: &iced::Rectangle,
     ) {
@@ -1104,8 +1102,8 @@ where
     fn mouse_interaction(
         &self,
         tree: &iced_core::widget::Tree,
-        _layout: iced_core::Layout<'_>,
-        _cursor: iced_core::mouse::Cursor,
+        layout: iced_core::Layout,
+        cursor: iced_core::mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> iced_core::mouse::Interaction {
@@ -1145,7 +1143,12 @@ where
             _ => (),
         };
 
-        Interaction::Idle
+        // Only claim hover while the cursor is actually over the map
+        if cursor.is_over(layout.bounds()) {
+            Interaction::Idle
+        } else {
+            Interaction::None
+        }
     }
 }
 
