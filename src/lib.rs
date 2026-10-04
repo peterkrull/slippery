@@ -2,6 +2,7 @@ mod draw_cache;
 
 pub mod sources;
 
+mod gesture;
 mod global_element;
 mod map_layers;
 mod map_program;
