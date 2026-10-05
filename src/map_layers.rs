@@ -129,9 +129,13 @@ where
             let mut layouts = layout.iter_mut(&mut tree.children);
             let (base_layout, base_tree) = layouts.next().unwrap();
 
-            self.base
-                .as_widget_mut()
-                .operate(base_tree, base_layout, viewport, renderer, operation);
+            self.base.as_widget_mut().operate(
+                base_tree,
+                base_layout,
+                viewport,
+                renderer,
+                operation,
+            );
 
             for (child, (child_layout, child_tree)) in self.children.iter_mut().zip(layouts) {
                 child.element.as_widget_mut().operate(
@@ -160,8 +164,7 @@ where
 
         // Update children first (reverse order - top to bottom)
         // This allows children to capture events before the map
-        for (child, (child_layout, child_tree)) in
-            self.children.iter_mut().rev().zip(layouts.rev())
+        for (child, (child_layout, child_tree)) in self.children.iter_mut().rev().zip(layouts.rev())
         {
             child.element.as_widget_mut().update(
                 child_tree,
@@ -202,9 +205,7 @@ where
         let (base_layout, base_tree) = layouts.next().unwrap();
 
         // Check children interactions first (reverse order - top to bottom)
-        for (child, (child_layout, child_tree)) in
-            self.children.iter().rev().zip(layouts.rev())
-        {
+        for (child, (child_layout, child_tree)) in self.children.iter().rev().zip(layouts.rev()) {
             let interaction = child.element.as_widget().mouse_interaction(
                 child_tree,
                 child_layout,

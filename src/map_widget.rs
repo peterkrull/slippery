@@ -6,7 +6,7 @@ use std::{
 };
 
 use iced_core::{
-    Element, Image, Point, Rectangle, Shell, Vector, Widget,
+    Image, Point, Rectangle, Shell, Vector, Widget,
     image::{Allocation, FilterMethod, Handle},
     widget::tree::State,
 };
@@ -36,6 +36,7 @@ pub struct MapWidget<'a, Message> {
     viewpoint: Viewpoint,
     cache_message: fn(CacheMessage) -> Message,
     on_update: Option<Box<dyn Fn(Projector) -> Message + 'a>>,
+    on_tap: Option<Box<dyn Fn(Projector, Point) -> Message + 'a>>,
     discrete_zoom_step_size: f32,
     discrete_zoom_step_duration: Duration,
 }
@@ -50,6 +51,7 @@ impl<'a, Message> MapWidget<'a, Message> {
             tile_cache,
             viewpoint,
             on_update: None,
+            on_tap: None,
             cache_message,
             discrete_zoom_step_size: 1.0,
             discrete_zoom_step_duration: Duration::from_millis(250),
@@ -60,6 +62,14 @@ impl<'a, Message> MapWidget<'a, Message> {
     pub fn on_update(self, func: impl Fn(Projector) -> Message + 'a) -> Self {
         Self {
             on_update: Some(Box::new(func)),
+            ..self
+        }
+    }
+
+    /// This message is emitted when the map is tapped, at a screen position
+    pub fn on_tap(self, func: impl Fn(Projector, Point) -> Message + 'a) -> Self {
+        Self {
+            on_tap: Some(Box::new(func)),
             ..self
         }
     }
@@ -363,6 +373,8 @@ impl WidgetState {
     }
 }
 
+impl<'a, Message> iced_core::widget::Meta for MapWidget<'a, Message> {}
+
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for MapWidget<'a, Message>
 where
     Renderer: iced_core::image::Renderer<Handle = Handle>
@@ -546,7 +558,7 @@ where
                     state.pan_move = PanMove::Idle;
                     state.zoom_move = ZoomMove::Idle;
 
-                    state.touch.press(*id, *position);
+                    state.touch.press(*id, *position, Instant::now());
                     shell.capture_event();
                 }
                 iced::touch::Event::FingerMoved { id, position } => {
@@ -583,6 +595,28 @@ where
                     let Some(release) = state.touch.released(*id, now) else {
                         return;
                     };
+
+                    if let Some(tap) = release.tap {
+                        if let Some(on_tap) = &self.on_tap {
+                            shell.publish(on_tap(projector.clone(), tap.position));
+                        }
+
+                        // A double tap zooms in a step, anchored at the tap
+                        if tap.double && self.on_update.is_some() {
+                            let zoom = self.viewpoint.zoom.f64();
+                            let target = (zoom + self.discrete_zoom_step_size as f64)
+                                .clamp(Zoom::MIN.f64(), Zoom::MAX.f64());
+
+                            state.zoom_move = ZoomMove::Discrete {
+                                point: Some(projector.screen_space_into_mercator(tap.position)),
+                                start_zoom: zoom,
+                                end_zoom: target,
+                                start_time: now,
+                                duration: self.discrete_zoom_step_duration,
+                            };
+                            needs_redraw = true;
+                        }
+                    }
 
                     if self.on_update.is_some() {
                         if let Some(velocity) = release.pan {
@@ -934,15 +968,5 @@ where
         } else {
             Interaction::None
         }
-    }
-}
-
-impl<'a, Message: 'a, Theme: 'a, Renderer: 'a> From<MapWidget<'a, Message>>
-    for Element<'a, Message, Theme, Renderer>
-where
-    Renderer: iced_core::image::Renderer<Handle = Handle> + iced_graphics::geometry::Renderer,
-{
-    fn from(value: MapWidget<'a, Message>) -> Self {
-        Self::new(value)
     }
 }
