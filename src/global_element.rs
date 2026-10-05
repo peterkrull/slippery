@@ -1,5 +1,7 @@
 use crate::Mercator;
+use iced::Widget as _;
 use iced::{Element, alignment};
+use iced_core::Widget;
 
 /// Like a regular [`Element`] but tied to a specific [`Geodetic`] coordinate
 pub struct GlobalElement<'a, Message, Theme, Renderer> {
@@ -10,12 +12,9 @@ pub struct GlobalElement<'a, Message, Theme, Renderer> {
 }
 
 impl<'a, Message, Theme, Renderer> GlobalElement<'a, Message, Theme, Renderer> {
-    pub fn new(
-        element: impl Into<Element<'a, Message, Theme, Renderer>>,
-        position: Mercator,
-    ) -> Self {
+    pub fn new(element: impl Widget<Message, Theme, Renderer> + 'a, position: Mercator) -> Self {
         Self {
-            element: element.into(),
+            element: element.boxed(),
             position,
             horizontal_alignment: alignment::Horizontal::Center,
             vertical_alignment: alignment::Vertical::Center,

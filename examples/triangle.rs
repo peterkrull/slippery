@@ -88,7 +88,7 @@ impl Application {
         Task::none()
     }
 
-    pub fn view(&self) -> impl Into<Element<'_, Message>> {
+    pub fn view(&self) -> Element<'_, Message> {
         let vertices = self.vertices.clone();
         let hovered_vertex = self.hovered_vertex;
         let dragging_vertex = self.dragging_vertex;

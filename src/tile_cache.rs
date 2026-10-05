@@ -20,7 +20,6 @@ use crate::{
 const PRUNE_TIME: Duration = Duration::from_secs(60);
 const PRUNE_THRESH: usize = 1024;
 
-
 /// The message that the [`TileCache`] uses to update. It is typically produced when
 /// interacting with a [`crate::map_widget::MapWidget`] in order to fetch new tiles,
 /// or when the fetching future resolves and responds with its result.

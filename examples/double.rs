@@ -1,4 +1,4 @@
-use iced::{self, Element, Task, widget::row};
+use iced::{self, Task, widget::row};
 use slippery::{
     CacheMessage, MapWidget, Projector, TileCache, TileCoord, Viewpoint, Zoom, location,
     sources::OpenStreetMap,
@@ -65,7 +65,7 @@ impl Application {
         Task::none()
     }
 
-    pub fn view(&self) -> impl Into<Element<'_, Message>> {
+    pub fn view(&self) -> impl iced::Widget<Message> {
         row![
             MapWidget::new(&self.cache, Message::Cache, self.viewpoint1)
                 .on_update(Message::MapProjector1),

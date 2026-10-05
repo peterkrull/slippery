@@ -1,41 +1,41 @@
-use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, alignment};
+use iced::{Event, Length, Point, Rectangle, Size, Vector, alignment};
 use iced_core::{
     Layout, Shell, Widget, mouse, overlay, renderer,
-    widget::{self, tree},
+    widget::{self, Meta, tree},
 };
 
 use crate::{GlobalElement, Projector, Viewpoint};
 
-pub struct MapLayers<'a, Message, Theme, Renderer> {
-    base: Element<'a, Message, Theme, Renderer>,
+pub struct MapLayers<'a, W, Message, Theme, Renderer> {
+    base: W,
     children: Vec<GlobalElement<'a, Message, Theme, Renderer>>,
     viewpoint: Viewpoint,
 }
 
-impl<'a, Message, Theme, Renderer> MapLayers<'a, Message, Theme, Renderer>
-where
-    Renderer: iced_core::Renderer,
-{
+impl<'a, W, Message, Theme, Renderer> MapLayers<'a, W, Message, Theme, Renderer> {
     pub fn new(
-        base: impl Into<Element<'a, Message, Theme, Renderer>>,
+        base: W,
         viewpoint: Viewpoint,
         children: Vec<GlobalElement<'a, Message, Theme, Renderer>>,
     ) -> Self {
         Self {
-            base: base.into(),
+            base,
             children,
             viewpoint,
         }
     }
 }
 
-impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-    for MapLayers<'a, Message, Theme, Renderer>
+impl<'a, W, Message, Theme, Renderer> Meta for MapLayers<'a, W, Message, Theme, Renderer> {}
+
+impl<'a, W, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for MapLayers<'a, W, Message, Theme, Renderer>
 where
+    W: Widget<Message, Theme, Renderer>,
     Renderer: iced_core::Renderer,
 {
     fn size(&self) -> Size<Length> {
-        self.base.as_widget().size()
+        self.base.size()
     }
 
     fn layout(
@@ -46,9 +46,7 @@ where
     ) {
         // 1. Layout the base map first
         // It provides the context/bounds for the projection
-        self.base
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
+        self.base.layout(&mut tree.children[0], renderer, limits);
 
         // We use the base child's size, but we ensure the projector bounds start
         // at 0,0 because the children are placed relative to this widget's origin.
@@ -64,7 +62,7 @@ where
             let child_tree = &mut tree.children[i + 1];
 
             // Layout children with relaxed limits (0 to the base map's size)
-            child.element.as_widget_mut().layout(
+            child.element.layout(
                 child_tree,
                 renderer,
                 &iced_core::layout::Limits::new(Size::ZERO, base_size),
@@ -129,22 +127,13 @@ where
             let mut layouts = layout.iter_mut(&mut tree.children);
             let (base_layout, base_tree) = layouts.next().unwrap();
 
-            self.base.as_widget_mut().operate(
-                base_tree,
-                base_layout,
-                viewport,
-                renderer,
-                operation,
-            );
+            self.base
+                .operate(base_tree, base_layout, viewport, renderer, operation);
 
             for (child, (child_layout, child_tree)) in self.children.iter_mut().zip(layouts) {
-                child.element.as_widget_mut().operate(
-                    child_tree,
-                    child_layout,
-                    viewport,
-                    renderer,
-                    operation,
-                );
+                child
+                    .element
+                    .operate(child_tree, child_layout, viewport, renderer, operation);
             }
         });
     }
@@ -166,7 +155,7 @@ where
         // This allows children to capture events before the map
         for (child, (child_layout, child_tree)) in self.children.iter_mut().rev().zip(layouts.rev())
         {
-            child.element.as_widget_mut().update(
+            child.element.update(
                 child_tree,
                 event,
                 child_layout,
@@ -182,7 +171,7 @@ where
         }
 
         // Update base map
-        self.base.as_widget_mut().update(
+        self.base.update(
             base_tree,
             event,
             base_layout,
@@ -206,7 +195,7 @@ where
 
         // Check children interactions first (reverse order - top to bottom)
         for (child, (child_layout, child_tree)) in self.children.iter().rev().zip(layouts.rev()) {
-            let interaction = child.element.as_widget().mouse_interaction(
+            let interaction = child.element.mouse_interaction(
                 child_tree,
                 child_layout,
                 cursor,
@@ -221,7 +210,6 @@ where
 
         // Fallback to base map interaction
         self.base
-            .as_widget()
             .mouse_interaction(base_tree, base_layout, cursor, viewport, renderer)
     }
 
@@ -239,7 +227,7 @@ where
         let (base_layout, base_tree) = layouts.next().unwrap();
 
         // 1. Draw base map
-        self.base.as_widget().draw(
+        self.base.draw(
             base_tree,
             renderer,
             theme,
@@ -253,7 +241,7 @@ where
         renderer.with_layer(layout.bounds(), |renderer| {
             for (child, (child_layout, child_tree)) in self.children.iter().zip(layouts) {
                 if child_layout.bounds().intersects(viewport) {
-                    child.element.as_widget().draw(
+                    child.element.draw(
                         child_tree,
                         renderer,
                         theme,
@@ -281,7 +269,7 @@ where
 
         let mut overlays = Vec::new();
 
-        overlays.extend(self.base.as_widget_mut().overlay(
+        overlays.extend(self.base.overlay(
             base_tree,
             base_layout,
             renderer,
@@ -291,7 +279,7 @@ where
         ));
 
         for (child, (child_layout, child_tree)) in self.children.iter_mut().zip(layouts) {
-            overlays.extend(child.element.as_widget_mut().overlay(
+            overlays.extend(child.element.overlay(
                 child_tree,
                 child_layout,
                 renderer,
@@ -302,17 +290,5 @@ where
         }
 
         overlays
-    }
-}
-
-impl<'a, Message, Theme, Renderer> From<MapLayers<'a, Message, Theme, Renderer>>
-    for Element<'a, Message, Theme, Renderer>
-where
-    Message: 'a,
-    Theme: 'a,
-    Renderer: iced_core::Renderer + 'a,
-{
-    fn from(layers: MapLayers<'a, Message, Theme, Renderer>) -> Self {
-        Element::new(layers)
     }
 }

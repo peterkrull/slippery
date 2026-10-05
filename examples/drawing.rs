@@ -59,7 +59,7 @@ impl Application {
         Task::none()
     }
 
-    pub fn view(&self) -> impl Into<Element<'_, Message>> {
+    pub fn view(&self) -> Element<'_, Message> {
         MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::Projector)

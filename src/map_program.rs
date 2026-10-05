@@ -4,16 +4,12 @@ use iced::widget::{
     stack,
 };
 use iced::{Element, Length, Rectangle};
-use iced::{Point, mouse};
+use iced::{Point, Widget, mouse};
 
 use crate::{
     CacheMessage, Projector, TileCache, Viewpoint, global_element::GlobalElement,
     map_layers::MapLayers, map_widget::MapWidget,
 };
-
-// ============================================================================
-// MapProgram - Hybrid Widget Builder
-// ============================================================================
 
 /// Represents the result of an interaction handler.
 ///
@@ -67,10 +63,6 @@ pub struct MapProgram<'a, Message> {
     // GlobalElements (markers, widgets at geodetic positions)
     children: Vec<GlobalElement<'a, Message, iced::Theme, iced::Renderer>>,
 }
-
-// ============================================================================
-// Builder API
-// ============================================================================
 
 impl<'a, Message: 'a> MapProgram<'a, Message> {
     /// Create a new MapProgram with the given tile cache.
@@ -196,16 +188,12 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
             .width(Length::Fill)
             .height(Length::Fill);
 
-            stack![layers, overlay].into()
+            stack![layers, overlay].boxed()
         } else {
-            layers.into()
+            layers.boxed()
         }
     }
 }
-
-// ============================================================================
-// Canvas Overlay for Drawing and Interactions
-// ============================================================================
 
 struct OverlayProgram<'a, Message> {
     draw_fn: Option<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
@@ -248,17 +236,17 @@ impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        if let Some(ref draw_fn) = self.draw_fn {
-            let projector = Projector {
-                viewpoint: self.viewpoint,
-                bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
-            };
+        let Some(draw_fn) = &self.draw_fn else {
+            return Vec::new();
+        };
 
-            let mut frame = canvas::Frame::new(renderer, bounds.size());
-            draw_fn(&projector, &mut frame);
-            vec![frame.into_geometry()]
-        } else {
-            vec![]
-        }
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
+        };
+
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        draw_fn(&projector, &mut frame);
+        vec![frame.into_geometry()]
     }
 }

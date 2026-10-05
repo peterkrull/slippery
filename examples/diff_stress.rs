@@ -137,7 +137,7 @@ impl StressTest {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let map = MapProgram::new(&self.cache)
+        MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::Projector)
             .with_draw_layer({
@@ -252,9 +252,7 @@ impl StressTest {
                     })
                     .collect::<Vec<_>>(),
             )
-            .build(self.viewpoint);
-
-        map.into()
+            .build(self.viewpoint)
     }
 }
 
