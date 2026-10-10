@@ -420,6 +420,21 @@ where
             bounds,
         };
 
+        // Only capture pointer inputs that concern the map.
+        let holding_pointer = state.touch.is_active()
+            || matches!(
+                &state.pan_move,
+                PanMove::Dragging { .. } | PanMove::AutoPan { .. }
+            )
+            || matches!(&state.zoom_move, ZoomMove::AutoZoom { .. });
+
+        let is_pointer_event = matches!(event, iced::Event::Mouse(_) | iced::Event::Touch(_));
+        let is_cursor_left = matches!(event, iced::Event::Mouse(iced::mouse::Event::CursorLeft));
+
+        if is_pointer_event && !holding_pointer && !is_cursor_left && !cursor.is_over(bounds) {
+            return;
+        }
+
         match event {
             iced::Event::Window(iced::window::Event::RedrawRequested(at)) => {
                 match &mut state.zoom_move {
