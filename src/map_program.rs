@@ -54,7 +54,7 @@ pub struct MapProgram<'a, Message> {
     on_update: Option<fn(Projector) -> Message>,
 
     // User drawing layer
-    draw_layer: Option<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
+    draw_layers: Vec<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
 
     // User interaction layer
     interact_layer:
@@ -73,7 +73,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
             tile_cache,
             on_cache: |_| panic!("MapProgram: on_cache() must be configured"),
             on_update: None,
-            draw_layer: None,
+            draw_layers: Vec::new(),
             interact_layer: None,
             children: Vec::new(),
         }
@@ -99,6 +99,8 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     ///
     /// The callback receives a `Projector` for coordinate conversion and a `Frame` for drawing.
     ///
+    /// Multiple draw layers may be added, which will be drawn in call order.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -111,7 +113,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     where
         F: Fn(&Projector, &mut Frame<iced::Renderer>) + 'a,
     {
-        self.draw_layer = Some(Box::new(f));
+        self.draw_layers.push(Box::new(f));
         self
     }
 
@@ -179,9 +181,9 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
         let layers = MapLayers::new(map_widget, viewpoint, self.children);
 
         // If there's a draw layer or interaction layer, add a canvas overlay
-        if self.draw_layer.is_some() || self.interact_layer.is_some() {
+        if !self.draw_layers.is_empty() || self.interact_layer.is_some() {
             let overlay = widget_canvas(OverlayProgram {
-                draw_fn: self.draw_layer,
+                draw_fn: self.draw_layers,
                 interact_fn: self.interact_layer,
                 viewpoint,
             })
@@ -196,7 +198,7 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
 }
 
 struct OverlayProgram<'a, Message> {
-    draw_fn: Option<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
+    draw_fn: Vec<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
     interact_fn:
         Option<Box<dyn Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a>>,
     viewpoint: Viewpoint,
@@ -236,17 +238,19 @@ impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let Some(draw_fn) = &self.draw_fn else {
-            return Vec::new();
-        };
+        self.draw_fn
+            .iter()
+            .map(|draw_fn| {
+                let projector = Projector {
+                    viewpoint: self.viewpoint,
+                    bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
+                };
 
-        let projector = Projector {
-            viewpoint: self.viewpoint,
-            bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
-        };
+                let mut frame = canvas::Frame::new(renderer, bounds.size());
+                draw_fn(&projector, &mut frame);
 
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        draw_fn(&projector, &mut frame);
-        vec![frame.into_geometry()]
+                frame.into_geometry()
+            })
+            .collect()
     }
 }
