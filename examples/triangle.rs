@@ -1,6 +1,6 @@
 use iced::mouse::{self, Cursor};
 use iced::widget::canvas::{self, Path, Stroke};
-use iced::{self, Color, Element, Task};
+use iced::{self, Color, Task, Widget};
 use slippery::{
     CacheMessage, Geodetic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
     sources::OpenStreetMap,
@@ -88,7 +88,7 @@ impl Application {
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self) -> impl Widget<Message> {
         let vertices = self.vertices.clone();
         let hovered_vertex = self.hovered_vertex;
         let dragging_vertex = self.dragging_vertex;
@@ -98,7 +98,7 @@ impl Application {
         MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::MapProjector)
-            .with_draw_layer(move |projector, frame| {
+            .with_visual_layer(move |projector, frame| {
                 let mut iterator = vertices.iter().cloned();
                 if let Some(vertex) = iterator.next() {
                     let triangle = Path::new(|builder| {
@@ -141,7 +141,7 @@ impl Application {
                     );
                 }
             })
-            .with_interaction(move |projector, cursor, event| {
+            .with_interact_layer(move |projector, cursor, event| {
                 use slippery::Action;
                 match event {
                     canvas::Event::Mouse(mouse_event) => {

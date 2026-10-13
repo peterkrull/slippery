@@ -1,5 +1,5 @@
 use iced::widget::canvas::{Path, Stroke};
-use iced::{self, Color, Element, Task};
+use iced::{self, Color, Task, Widget};
 use slippery::location;
 use slippery::{
     CacheMessage, Geodetic, MapProgram, Projector, TileCache, TileCoord, Viewpoint, Zoom,
@@ -59,11 +59,11 @@ impl Application {
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self) -> impl Widget<Message> {
         MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::Projector)
-            .with_draw_layer(|projector, frame| {
+            .with_visual_layer(|projector, frame| {
                 // Line connecting Paris and London
                 let p1 = projector.geodetic_into_screen_space(location::paris());
                 let p2 = projector.geodetic_into_screen_space(location::london());

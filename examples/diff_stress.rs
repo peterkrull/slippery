@@ -1,6 +1,7 @@
+use iced::Widget;
 use iced::widget::image;
 use iced::{
-    Border, Color, Element, Shadow, Task, Vector,
+    Border, Color, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
     mouse::Cursor,
     widget::{button, column, container, text},
@@ -136,11 +137,11 @@ impl StressTest {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self) -> impl Widget<Message> {
         MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::Projector)
-            .with_draw_layer({
+            .with_visual_layer({
                 let points: Vec<_> = self
                     .points
                     .iter()
@@ -174,7 +175,7 @@ impl StressTest {
                     }
                 }
             })
-            .with_interaction({
+            .with_interact_layer({
                 let points: Vec<_> = self.points.iter().map(|p| (p.position, p.id)).collect();
                 let dragged_point = self.dragged_point;
 

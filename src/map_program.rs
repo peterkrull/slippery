@@ -1,10 +1,10 @@
-use iced::widget::{
-    canvas as widget_canvas,
-    canvas::{self, Frame, Geometry},
-    stack,
+use iced::widget::canvas::Program;
+use iced::{Length, Rectangle};
+use iced::{Point, Widget};
+use iced::{
+    mouse::Cursor,
+    widget::canvas::{Action as CanvasAction, Canvas, Event, Frame, Geometry},
 };
-use iced::{Element, Length, Rectangle};
-use iced::{Point, Widget, mouse};
 
 use crate::{
     CacheMessage, Projector, TileCache, Viewpoint, global_element::GlobalElement,
@@ -53,12 +53,11 @@ pub struct MapProgram<'a, Message> {
     // Optional callbacks
     on_update: Option<fn(Projector) -> Message>,
 
-    // User drawing layer
-    draw_layers: Vec<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
+    // User drawing layer(s)
+    visual_layers: Vec<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
 
-    // User interaction layer
-    interact_layer:
-        Option<Box<dyn Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a>>,
+    // User interaction layer(s)
+    interact_layers: Vec<Box<dyn Fn(&Projector, &Cursor, &Event) -> Action<Message> + 'a>>,
 
     // GlobalElements (markers, widgets at geodetic positions)
     children: Vec<GlobalElement<'a, Message, iced::Theme, iced::Renderer>>,
@@ -73,8 +72,8 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
             tile_cache,
             on_cache: |_| panic!("MapProgram: on_cache() must be configured"),
             on_update: None,
-            draw_layers: Vec::new(),
-            interact_layer: None,
+            visual_layers: Vec::new(),
+            interact_layers: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -109,11 +108,11 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     ///     frame.fill(&canvas::Path::circle(pos, 10.0), Color::RED);
     /// })
     /// ```
-    pub fn with_draw_layer<F>(mut self, f: F) -> Self
+    pub fn with_visual_layer<F>(mut self, f: F) -> Self
     where
         F: Fn(&Projector, &mut Frame<iced::Renderer>) + 'a,
     {
-        self.draw_layers.push(Box::new(f));
+        self.visual_layers.push(Box::new(f));
         self
     }
 
@@ -134,11 +133,11 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     ///     MapInteraction::None  // Pass through to MapWidget for panning
     /// })
     /// ```
-    pub fn with_interaction<F>(mut self, f: F) -> Self
+    pub fn with_interact_layer<F>(mut self, f: F) -> Self
     where
-        F: Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a,
+        F: Fn(&Projector, &Cursor, &Event) -> Action<Message> + 'a,
     {
-        self.interact_layer = Some(Box::new(f));
+        self.interact_layers.push(Box::new(f));
         self
     }
 
@@ -165,7 +164,10 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
     /// Build the final widget with the given viewpoint.
     ///
     /// Returns a layered Element with MapWidget at the bottom and Canvas overlay on top.
-    pub fn build(self, viewpoint: Viewpoint) -> Element<'a, Message, iced::Theme, iced::Renderer>
+    pub fn build(
+        self,
+        viewpoint: Viewpoint,
+    ) -> impl Widget<Message, iced::Theme, iced::Renderer> + 'a
     where
         Message: Clone + 'a,
     {
@@ -178,56 +180,58 @@ impl<'a, Message: 'a> MapProgram<'a, Message> {
         }
 
         // Wrap in MapLayers for child positioning
-        let layers = MapLayers::new(map_widget, viewpoint, self.children);
+        let base_map = MapLayers::new(map_widget, viewpoint, self.children);
 
-        // If there's a draw layer or interaction layer, add a canvas overlay
-        if !self.draw_layers.is_empty() || self.interact_layer.is_some() {
-            let overlay = widget_canvas(OverlayProgram {
-                draw_fn: self.draw_layers,
-                interact_fn: self.interact_layer,
+        let mut overlays =
+            Vec::with_capacity(self.visual_layers.len() + self.interact_layers.len());
+
+        for interact_fn in self.interact_layers {
+            let canvas = Canvas::new(InteractProgram {
+                interact_fn,
                 viewpoint,
             })
             .width(Length::Fill)
-            .height(Length::Fill);
+            .height(Length::Fill)
+            .boxed();
 
-            stack![layers, overlay].boxed()
-        } else {
-            layers.boxed()
+            overlays.push(canvas);
         }
+
+        for visual_fn in self.visual_layers {
+            let canvas = Canvas::new(VisualProgram {
+                draw_fn: visual_fn,
+                viewpoint,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .boxed();
+
+            overlays.push(canvas);
+        }
+
+        // If there's a draw layer or interaction layer, add a canvas overlay
+        iced::widget::Stack::new()
+            .push(base_map.boxed())
+            .extend(overlays)
     }
 }
 
-struct OverlayProgram<'a, Message> {
-    draw_fn: Vec<Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>>,
-    interact_fn:
-        Option<Box<dyn Fn(&Projector, &mouse::Cursor, &canvas::Event) -> Action<Message> + 'a>>,
+struct VisualProgram<'a> {
+    draw_fn: Box<dyn Fn(&Projector, &mut Frame<iced::Renderer>) + 'a>,
     viewpoint: Viewpoint,
 }
 
-impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message> {
+impl<'a, Message: Clone> Program<Message> for VisualProgram<'a> {
     type State = ();
 
     fn update(
         &self,
         _state: &mut Self::State,
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        if let Some(ref interact_fn) = self.interact_fn {
-            let projector = Projector {
-                viewpoint: self.viewpoint,
-                bounds,
-            };
-
-            match interact_fn(&projector, &cursor, event) {
-                Action::None => None,
-                Action::Publish(msg) => Some(canvas::Action::publish(msg)),
-                Action::Capture(msg) => Some(canvas::Action::publish(msg).and_capture()),
-            }
-        } else {
-            None
-        }
+        _event: &Event,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Option<CanvasAction<Message>> {
+        None
     }
 
     fn draw(
@@ -236,21 +240,55 @@ impl<'a, Message: Clone> canvas::Program<Message> for OverlayProgram<'a, Message
         renderer: &iced::Renderer,
         _theme: &iced::Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        _cursor: Cursor,
     ) -> Vec<Geometry> {
-        self.draw_fn
-            .iter()
-            .map(|draw_fn| {
-                let projector = Projector {
-                    viewpoint: self.viewpoint,
-                    bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
-                };
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            bounds: Rectangle::new(Point::ORIGIN, bounds.size()),
+        };
 
-                let mut frame = canvas::Frame::new(renderer, bounds.size());
-                draw_fn(&projector, &mut frame);
+        let mut frame = Frame::new(renderer, bounds.size());
+        (self.draw_fn)(&projector, &mut frame);
 
-                frame.into_geometry()
-            })
-            .collect()
+        vec![frame.into_geometry()]
+    }
+}
+
+struct InteractProgram<'a, Message> {
+    interact_fn: Box<dyn Fn(&Projector, &Cursor, &Event) -> Action<Message> + 'a>,
+    viewpoint: Viewpoint,
+}
+
+impl<'a, Message: Clone> Program<Message> for InteractProgram<'a, Message> {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<CanvasAction<Message>> {
+        let projector = Projector {
+            viewpoint: self.viewpoint,
+            bounds,
+        };
+
+        match (self.interact_fn)(&projector, &cursor, event) {
+            Action::None => None,
+            Action::Publish(msg) => Some(CanvasAction::publish(msg)),
+            Action::Capture(msg) => Some(CanvasAction::publish(msg).and_capture()),
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        _renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        Vec::new()
     }
 }

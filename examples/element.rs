@@ -1,5 +1,5 @@
 use iced::{
-    Border, Color, Element, Shadow, Task, Vector, alignment,
+    Border, Color, Shadow, Task, Vector, Widget, alignment,
     mouse::Cursor,
     widget::{button, column, container, text},
 };
@@ -93,7 +93,7 @@ impl PopupExample {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self) -> impl Widget<Message> {
         let point_position = self.point_position;
         let is_dragging = self.is_dragging;
         let is_popup_open = self.is_popup_open;
@@ -101,7 +101,7 @@ impl PopupExample {
         MapProgram::new(&self.cache)
             .on_cache(Message::Cache)
             .on_update(Message::Projector)
-            .with_draw_layer(move |projector, frame| {
+            .with_visual_layer(move |projector, frame| {
                 let screen_pos = projector.geodetic_into_screen_space(point_position);
 
                 // Draw a nice circle
@@ -114,7 +114,7 @@ impl PopupExample {
                         .with_width(2.0),
                 );
             })
-            .with_interaction(move |projector, cursor, event| {
+            .with_interact_layer(move |projector, cursor, event| {
                 use iced::mouse;
                 use iced::widget::canvas::Event;
 
