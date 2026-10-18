@@ -85,10 +85,7 @@ impl TileCache {
             fetcher: Arc::new(HttpFetcher {
                 semaphore: Semaphore::new(6),
                 source: Box::new(source),
-                client: reqwest::ClientBuilder::new()
-                    .user_agent("lib-slippery")
-                    .build()
-                    .unwrap(),
+                client: tile_client(),
             }),
             cleanup_timer: Instant::now(),
         }
@@ -279,6 +276,23 @@ impl TileCache {
 
         Task::batch([cleanup_task, task])
     }
+}
+
+/// The HTTP client tiles are fetched with.
+fn tile_client() -> reqwest::Client {
+    let builder = reqwest::ClientBuilder::new().user_agent("lib-slippery");
+
+    // Android needs a `rustls` client trusting Mozilla's bundled roots.
+    #[cfg(target_os = "android")]
+    let builder = builder.tls_backend_preconfigured(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            })
+            .with_no_client_auth(),
+    );
+
+    builder.build().expect("a valid HTTP client")
 }
 
 trait Fetcher {
